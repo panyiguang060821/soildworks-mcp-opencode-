@@ -36,6 +36,13 @@ DEFAULT_PART_TEMPLATE = Path(
     )
 )
 
+DEFAULT_ASSEMBLY_TEMPLATE = Path(
+    os.environ.get(
+        "SOLIDWORKS_MCP_ASSEMBLY_TEMPLATE",
+        r"C:\ProgramData\SOLIDWORKS\SOLIDWORKS 2025\templates\gb_assembly.asmdot",
+    )
+)
+
 DOC_TYPE_BY_SUFFIX = {
     ".sldprt": 1,
     ".sldasm": 2,
@@ -838,6 +845,265 @@ def run_macro(
             "loader can raise a Microsoft .NET Framework dialog and terminate SolidWorks."
         ),
     }
+
+
+# Phase 1: Sketch Entities
+
+@mcp.tool()
+def draw_line(
+    x1: float, y1: float, x2: float, y2: float,
+    z1: float = 0.0, z2: float = 0.0,
+) -> dict[str, Any]:
+    """Draw a line segment in the active sketch. Coordinates in meters."""
+    return _run_bridge("draw_line", {
+        "x1": x1, "y1": y1, "z1": z1,
+        "x2": x2, "y2": y2, "z2": z2,
+    })
+
+
+@mcp.tool()
+def draw_arc(
+    center_x: float, center_y: float,
+    start_x: float, start_y: float,
+    end_x: float, end_y: float,
+    direction: int = 1,
+    center_z: float = 0.0,
+    start_z: float = 0.0,
+    end_z: float = 0.0,
+) -> dict[str, Any]:
+    """Draw an arc in the active sketch. direction: 1=CCW, -1=CW. Coordinates in meters."""
+    return _run_bridge("draw_arc", {
+        "centerX": center_x, "centerY": center_y, "centerZ": center_z,
+        "startX": start_x, "startY": start_y, "startZ": start_z,
+        "endX": end_x, "endY": end_y, "endZ": end_z,
+        "direction": direction,
+    })
+
+
+@mcp.tool()
+def draw_polygon(
+    center_x: float, center_y: float, radius: float,
+    sides: int, inscribed: bool = False,
+    center_z: float = 0.0,
+) -> dict[str, Any]:
+    """Draw a regular polygon in the active sketch. Coordinates in meters."""
+    return _run_bridge("draw_polygon", {
+        "centerX": center_x, "centerY": center_y, "centerZ": center_z,
+        "radius": radius, "sides": sides, "inscribed": inscribed,
+    })
+
+
+@mcp.tool()
+def draw_centerline(
+    x1: float, y1: float, x2: float, y2: float,
+    z1: float = 0.0, z2: float = 0.0,
+) -> dict[str, Any]:
+    """Draw a centerline (construction line) in the active sketch. Coordinates in meters."""
+    return _run_bridge("draw_centerline", {
+        "x1": x1, "y1": y1, "z1": z1,
+        "x2": x2, "y2": y2, "z2": z2,
+    })
+
+
+@mcp.tool()
+def create_sketch_on_face(face_name: str) -> dict[str, Any]:
+    """Start editing a sketch on a model face identified by name."""
+    return _run_bridge("create_sketch_on_face", {"faceName": face_name})
+
+
+# Phase 2: Advanced Features
+
+@mcp.tool()
+def create_ref_plane(
+    ref1: str, constraint1: int, offset1: float = 0.0,
+    ref2: str | None = None, constraint2: int = 0, offset2: float = 0.0,
+    ref3: str | None = None, constraint3: int = 0, offset3: float = 0.0,
+) -> dict[str, Any]:
+    """Create a reference plane. constraint values: 1=Distance, 2=Angle, 4=Parallel, 8=Perpendicular, 16=MidPlane. Offset in meters."""
+    payload: dict[str, Any] = {"ref1": ref1, "constraint1": constraint1, "offset1": offset1}
+    if ref2 is not None:
+        payload["ref2"] = ref2
+        payload["constraint2"] = constraint2
+        payload["offset2"] = offset2
+    if ref3 is not None:
+        payload["ref3"] = ref3
+        payload["constraint3"] = constraint3
+        payload["offset3"] = offset3
+    return _run_bridge("create_ref_plane", payload)
+
+
+@mcp.tool()
+def mirror_feature(
+    mirror_plane: str, features: list[str],
+    geom_pattern: bool = False, merge: bool = True,
+) -> dict[str, Any]:
+    """Mirror features across a plane. mirror_plane is the plane name, features is a list of feature names."""
+    return _run_bridge("mirror_feature", {
+        "mirrorPlane": mirror_plane,
+        "features": features,
+        "geomPattern": geom_pattern,
+        "merge": merge,
+    })
+
+
+@mcp.tool()
+def circular_pattern(
+    axis: str, count: int, angle: float,
+    features: list[str], equal_spacing: bool = True,
+) -> dict[str, Any]:
+    """Create a circular pattern. axis is the axis name, angle in radians, features is list of feature names."""
+    return _run_bridge("circular_pattern", {
+        "axis": axis, "count": count, "angle": angle,
+        "features": features, "equalSpacing": equal_spacing,
+    })
+
+
+@mcp.tool()
+def linear_pattern(
+    direction1: str, d1_count: int, d1_spacing: float,
+    features: list[str],
+    direction2: str | None = None, d2_count: int = 1, d2_spacing: float = 0.0,
+) -> dict[str, Any]:
+    """Create a linear pattern. Spacing in meters. direction1/direction2 are edge or axis names."""
+    payload: dict[str, Any] = {
+        "direction1": direction1, "d1Count": d1_count, "d1Spacing": d1_spacing,
+        "features": features,
+    }
+    if direction2 is not None:
+        payload["direction2"] = direction2
+        payload["d2Count"] = d2_count
+        payload["d2Spacing"] = d2_spacing
+    return _run_bridge("linear_pattern", payload)
+
+
+@mcp.tool()
+def loft_boss(
+    profiles: list[str],
+    guides: list[str] | None = None,
+    merge_result: bool = True,
+) -> dict[str, Any]:
+    """Create a loft boss feature. profiles and guides are sketch feature names."""
+    payload: dict[str, Any] = {"profiles": profiles, "mergeResult": merge_result}
+    if guides is not None:
+        payload["guides"] = guides
+    return _run_bridge("loft_boss", payload)
+
+
+@mcp.tool()
+def sweep_boss(
+    profile: str, path: str, merge_result: bool = True,
+) -> dict[str, Any]:
+    """Create a sweep boss feature. profile and path are sketch feature names."""
+    return _run_bridge("sweep_boss", {
+        "profile": profile, "path": path, "mergeResult": merge_result,
+    })
+
+
+@mcp.tool()
+def rib(
+    sketch: str, thickness: float,
+    thickness_type: int = 0, flip: bool = False, draft_enable: bool = False,
+) -> dict[str, Any]:
+    """Create a rib feature. thickness in meters. thickness_type: 0=OneSide, 1=TwoSides, 2=MidPlane."""
+    return _run_bridge("rib", {
+        "sketch": sketch, "thickness": thickness,
+        "thicknessType": thickness_type, "flip": flip, "draftEnable": draft_enable,
+    })
+
+
+# Phase 3: Assembly
+
+@mcp.tool()
+def new_assembly(template_path: str | None = None) -> dict[str, Any]:
+    """Create a new SolidWorks assembly from a template."""
+    resolved = template_path or str(DEFAULT_ASSEMBLY_TEMPLATE)
+    return _run_bridge("new_assembly", {"templatePath": resolved})
+
+
+@mcp.tool()
+def add_component(
+    file_path: str, config_name: str = "",
+    x: float = 0.0, y: float = 0.0, z: float = 0.0,
+) -> dict[str, Any]:
+    """Insert a component into the active assembly. Coordinates in meters."""
+    return _run_bridge("add_component", {
+        "filePath": file_path, "configName": config_name,
+        "x": x, "y": y, "z": z,
+    })
+
+
+@mcp.tool()
+def add_mate(
+    mate_type: int, entities: list[str],
+    align_type: int = 0, flip: bool = False,
+    distance: float = 0.0, angle: float = 0.0,
+) -> dict[str, Any]:
+    """Add a mate in the active assembly. mate_type: 0=coincident, 1=concentric, 2=perpendicular, 3=parallel, 4=tangent, 5=distance, 6=angle. entities: list of 'name@type' strings."""
+    return _run_bridge("add_mate", {
+        "mateType": mate_type, "entities": entities,
+        "alignType": align_type, "flip": flip,
+        "distance": distance, "angle": angle,
+    })
+
+
+@mcp.tool()
+def add_explode_step(
+    components: list[str],
+    dx: float = 0.0, dy: float = 0.0, dz: float = 0.0,
+) -> dict[str, Any]:
+    """Create an auto-explode view for selected components. Translation in meters."""
+    return _run_bridge("add_explode_step", {
+        "components": components, "dx": dx, "dy": dy, "dz": dz,
+    })
+
+
+@mcp.tool()
+def add_dimension_v2(
+    entities: list[str],
+    x: float = 0.0, y: float = 0.0, z: float = 0.0,
+) -> dict[str, Any]:
+    """Add a smart dimension to selected sketch entities. entities: list of 'name@type' strings. Position (x,y,z) is where the dimension text appears."""
+    return _run_bridge("add_dimension_v2", {
+        "entities": entities, "x": x, "y": y, "z": z,
+    })
+
+
+@mcp.tool()
+def get_mass_properties() -> dict[str, Any]:
+    """Get mass, volume, surface area, and center of mass of the active part."""
+    return _run_bridge("get_mass_properties", {})
+
+
+# Phase 4: Export & Analysis
+
+@mcp.tool()
+def export_file(output_path: str, version: int = 0, options: int = 0) -> dict[str, Any]:
+    """Export the active document. Supported formats: STEP, IGES, STL, Parasolid, PDF (drawings). Output path determines format by extension."""
+    return _run_bridge("export_file", {
+        "outputPath": output_path, "version": version, "options": options,
+    })
+
+
+@mcp.tool()
+def check_interference(coincidence_is_interference: bool = False) -> dict[str, Any]:
+    """Check for interferences in the active assembly."""
+    return _run_bridge("check_interference", {
+        "coincidenceIsInterference": coincidence_is_interference,
+    })
+
+
+@mcp.tool()
+def measure_distance(entities: list[str]) -> dict[str, Any]:
+    """Measure distance/angle between entities. entities: list of 'name@type' strings."""
+    return _run_bridge("measure_distance", {"entities": entities})
+
+
+@mcp.tool()
+def set_material(material: str, database: str = "", config: str = "") -> dict[str, Any]:
+    """Set the material of the active part. database: material database name (e.g. 'SOLIDWORKS Materials'). material: material name (e.g. '1060 Alloy')."""
+    return _run_bridge("set_material", {
+        "database": database, "material": material, "config": config,
+    })
 
 
 @mcp.tool()

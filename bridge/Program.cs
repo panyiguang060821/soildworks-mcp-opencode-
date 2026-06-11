@@ -40,6 +40,8 @@ internal static class Program
     [STAThread]
     public static int Main(string[] args)
     {
+        Console.InputEncoding = System.Text.Encoding.UTF8;
+        Console.OutputEncoding = System.Text.Encoding.UTF8;
         try
         {
             if (args.Length == 0)
@@ -107,10 +109,17 @@ internal static class Program
         {
             "ping" => new { ok = true, bridge = "solidworks-bridge" },
             "new_part" => NewPart(payload),
+            "new_assembly" => NewAssembly(payload),
             "create_sketch_on_plane" => CreateSketchOnPlane(payload),
+            "create_sketch_on_face" => CreateSketchOnFace(payload),
             "create_center_rectangle" => CreateCenterRectangle(payload),
             "create_circle" => CreateCircle(payload),
+            "draw_line" => DrawLine(payload),
+            "draw_arc" => DrawArc(payload),
+            "draw_polygon" => DrawPolygon(payload),
+            "draw_centerline" => DrawCenterline(payload),
             "add_dimension" => AddDimension(payload),
+            "add_dimension_v2" => AddDimensionV2(payload),
             "extrude_boss" => ExtrudeBoss(payload),
             "extrude_cut" => ExtrudeCut(payload),
             "inspect_active_part" => InspectActivePart(payload),
@@ -118,6 +127,21 @@ internal static class Program
             "apply_chamfer_to_feature_edges" => ApplyChamferToFeatureEdges(payload),
             "combine_all_bodies" => CombineAllBodies(payload),
             "run_macro" => RunMacro(payload),
+            "create_ref_plane" => CreateRefPlane(payload),
+            "mirror_feature" => MirrorFeature(payload),
+            "circular_pattern" => CircularPattern(payload),
+            "linear_pattern" => LinearPattern(payload),
+            "loft_boss" => LoftBoss(payload),
+            "sweep_boss" => SweepBoss(payload),
+            "rib" => Rib(payload),
+            "add_component" => AddComponent(payload),
+            "add_mate" => AddMate(payload),
+            "add_explode_step" => AddExplodeStep(payload),
+            "get_mass_properties" => GetMassProperties(payload),
+            "export_file" => ExportFile(payload),
+            "check_interference" => CheckInterference(payload),
+            "measure_distance" => MeasureDistance(payload),
+            "set_material" => SetMaterial(payload),
             _ => throw new InvalidOperationException($"Unknown command: {command}")
         };
     }
@@ -635,6 +659,642 @@ internal static class Program
             recommendedMethod = "create_rectangular_block|create_plate_with_holes|design_from_prompt",
             detail = "SolidWorks macro execution is disabled on this host because the .NET/VSTA macro loader can raise a Microsoft .NET Framework dialog and terminate SolidWorks.",
         };
+    }
+
+    // Phase 1: Sketch Entities
+
+    private static object DrawLine(JsonElement payload)
+    {
+        var app = AttachOrLaunch(false, ensureVisible: false);
+        ModelDoc2 model = RequireActiveModel(app);
+        double x1 = payload.GetProperty("x1").GetDouble();
+        double y1 = payload.GetProperty("y1").GetDouble();
+        double z1 = payload.TryGetProperty("z1", out var z1e) ? z1e.GetDouble() : 0.0;
+        double x2 = payload.GetProperty("x2").GetDouble();
+        double y2 = payload.GetProperty("y2").GetDouble();
+        double z2 = payload.TryGetProperty("z2", out var z2e) ? z2e.GetDouble() : 0.0;
+
+        var line = model.SketchManager.CreateLine(x1, y1, z1, x2, y2, z2);
+        SketchSegment[] segments = GetActiveSketchSegments(model);
+        return new { ok = line != null, x1, y1, x2, y2, activeSketchSegmentCount = segments.Length };
+    }
+
+    private static object DrawArc(JsonElement payload)
+    {
+        var app = AttachOrLaunch(false, ensureVisible: false);
+        ModelDoc2 model = RequireActiveModel(app);
+        double cx = payload.GetProperty("centerX").GetDouble();
+        double cy = payload.GetProperty("centerY").GetDouble();
+        double cz = payload.TryGetProperty("centerZ", out var cze) ? cze.GetDouble() : 0.0;
+        double sx = payload.GetProperty("startX").GetDouble();
+        double sy = payload.GetProperty("startY").GetDouble();
+        double sz = payload.TryGetProperty("startZ", out var sze) ? sze.GetDouble() : 0.0;
+        double ex = payload.GetProperty("endX").GetDouble();
+        double ey = payload.GetProperty("endY").GetDouble();
+        double ez = payload.TryGetProperty("endZ", out var eze) ? eze.GetDouble() : 0.0;
+        int dir = payload.TryGetProperty("direction", out var de) ? de.GetInt32() : 1;
+
+        var arc = model.SketchManager.CreateArc(cx, cy, cz, sx, sy, sz, ex, ey, ez, (short)dir);
+        SketchSegment[] segments = GetActiveSketchSegments(model);
+        return new { ok = arc != null, centerX = cx, centerY = cy, activeSketchSegmentCount = segments.Length };
+    }
+
+    private static object DrawPolygon(JsonElement payload)
+    {
+        var app = AttachOrLaunch(false, ensureVisible: false);
+        ModelDoc2 model = RequireActiveModel(app);
+        double cx = payload.GetProperty("centerX").GetDouble();
+        double cy = payload.GetProperty("centerY").GetDouble();
+        double cz = payload.TryGetProperty("centerZ", out var cze) ? cze.GetDouble() : 0.0;
+        double r = payload.GetProperty("radius").GetDouble();
+        int sides = payload.GetProperty("sides").GetInt32();
+        bool inscribed = payload.TryGetProperty("inscribed", out var ie) && ie.GetBoolean();
+
+        object?[]? poly = model.SketchManager.CreatePolygon(cx, cy, cz, cx + r, cy, cz, sides, inscribed) as object[];
+        SketchSegment[] segments = GetActiveSketchSegments(model);
+        return new { ok = poly != null, sides, inscribed, segmentCount = poly?.Length ?? 0, activeSketchSegmentCount = segments.Length };
+    }
+
+    private static object DrawCenterline(JsonElement payload)
+    {
+        var app = AttachOrLaunch(false, ensureVisible: false);
+        ModelDoc2 model = RequireActiveModel(app);
+        double x1 = payload.GetProperty("x1").GetDouble();
+        double y1 = payload.GetProperty("y1").GetDouble();
+        double z1 = payload.TryGetProperty("z1", out var z1e) ? z1e.GetDouble() : 0.0;
+        double x2 = payload.GetProperty("x2").GetDouble();
+        double y2 = payload.GetProperty("y2").GetDouble();
+        double z2 = payload.TryGetProperty("z2", out var z2e) ? z2e.GetDouble() : 0.0;
+
+        var line = model.SketchManager.CreateCenterLine(x1, y1, z1, x2, y2, z2);
+        return new { ok = line != null, x1, y1, x2, y2 };
+    }
+
+    private static object CreateSketchOnFace(JsonElement payload)
+    {
+        var app = AttachOrLaunch(false, ensureVisible: false);
+        ModelDoc2 model = RequireActiveModel(app);
+        string faceName = payload.GetProperty("faceName").GetString()!;
+
+        bool selected = model.Extension.SelectByID2(faceName, "FACE", 0, 0, 0, false, 0, null, 0);
+        if (!selected)
+            return new { ok = false, reason = "face_not_found", faceName };
+
+        model.SketchManager.InsertSketch(true);
+        return new { ok = true, faceName, hasActiveSketch = GetActiveSketch(model) != null };
+    }
+
+    // Phase 2: Advanced Features
+
+    private static object CreateRefPlane(JsonElement payload)
+    {
+        var app = AttachOrLaunch(false, ensureVisible: false);
+        ModelDoc2 model = RequireActiveModel(app);
+        string ref1 = payload.GetProperty("ref1").GetString()!;
+        int constraint1 = payload.GetProperty("constraint1").GetInt32();
+        double offset1 = payload.TryGetProperty("offset1", out var o1) ? o1.GetDouble() : 0.0;
+        string? ref2 = payload.TryGetProperty("ref2", out var r2e) ? r2e.GetString() : null;
+        int constraint2 = payload.TryGetProperty("constraint2", out var c2e) ? c2e.GetInt32() : 0;
+        double offset2 = payload.TryGetProperty("offset2", out var o2e) ? o2e.GetDouble() : 0.0;
+        string? ref3 = payload.TryGetProperty("ref3", out var r3e) ? r3e.GetString() : null;
+        int constraint3 = payload.TryGetProperty("constraint3", out var c3e) ? c3e.GetInt32() : 0;
+        double offset3 = payload.TryGetProperty("offset3", out var o3e) ? o3e.GetDouble() : 0.0;
+
+        model.ClearSelection2(true);
+
+        bool sel1 = TrySelectPlane(model, ref1, false, 1);
+        if (!sel1)
+            return new { ok = false, reason = "ref1_not_found", ref1 };
+
+        bool sel2 = true, sel3 = true;
+        if (ref2 != null) sel2 = TrySelectPlane(model, ref2, true, 2);
+        if (ref3 != null) sel3 = TrySelectPlane(model, ref3, true, 4);
+
+        Feature? feature = null;
+        string attempt = "insert_ref_plane";
+
+        // Attempt 1: Direct InsertRefPlane
+        int featureCountBefore = CollectFeatureSummaries(model).Count;
+        model.FeatureManager.InsertRefPlane(constraint1, offset1, constraint2, offset2, constraint3, offset3);
+        
+        // Get the newly created feature
+        if (CollectFeatureSummaries(model).Count > featureCountBefore)
+        {
+            feature = GetLastFeature(model);
+        }
+
+        // Attempt 2: Try with just first constraint
+        if (feature == null)
+        {
+            attempt = "insert_ref_plane_no_offset";
+            model.ClearSelection2(true);
+            sel1 = TrySelectPlane(model, ref1, false, 1);
+            featureCountBefore = CollectFeatureSummaries(model).Count;
+            model.FeatureManager.InsertRefPlane(constraint1, offset1, 0, 0.0, 0, 0.0);
+            
+            if (CollectFeatureSummaries(model).Count > featureCountBefore)
+            {
+                feature = GetLastFeature(model);
+            }
+        }
+
+        return new { ok = feature != null, featureName = feature?.Name, ref1, constraint1, offset1, sel1, sel2, sel3, attempt };
+    }
+
+    private static bool TrySelectPlane(ModelDoc2 model, string planeName, bool append, int mark)
+    {
+        string planeKey = NormalizePlaneKey(planeName);
+        string[] candidateNames = PlaneAliases.TryGetValue(planeKey, out string[]? aliases) ? aliases : new[] { planeName };
+        
+        // Try without mark first (for InsertRefPlane compatibility)
+        foreach (string name in candidateNames)
+        {
+            if (model.Extension.SelectByID2(name, "PLANE", 0, 0, 0, append, 0, null, 0))
+                return true;
+        }
+        
+        // Try with mark if that fails
+        foreach (string name in candidateNames)
+        {
+            if (model.Extension.SelectByID2(name, "PLANE", 0, 0, 0, append, mark, null, 0))
+                return true;
+        }
+        
+        return model.Extension.SelectByID2(planeName, "PLANE", 0, 0, 0, append, 0, null, 0);
+    }
+
+    private static object MirrorFeature(JsonElement payload)
+    {
+        var app = AttachOrLaunch(false, ensureVisible: false);
+        ModelDoc2 model = RequireActiveModel(app);
+        string mirrorPlane = payload.GetProperty("mirrorPlane").GetString()!;
+        string[] featureNames = payload.GetProperty("features").EnumerateArray().Select(e => e.GetString()!).ToArray();
+        bool geomPattern = payload.TryGetProperty("geomPattern", out var gp) && gp.GetBoolean();
+        bool merge = payload.TryGetProperty("merge", out var m) ? m.GetBoolean() : true;
+
+        model.ClearSelection2(true);
+        int selectedCount = 0;
+        foreach (string name in featureNames)
+        {
+            Feature? feat = FindFeatureByName(model, name);
+            if (feat == null)
+                return new { ok = false, reason = "feature_not_found", featureName = name };
+            bool sel = model.Extension.SelectByID2(name, "BODYFEATURE", 0, 0, 0, selectedCount > 0, 1, null, 0);
+            if (sel) selectedCount++;
+        }
+        model.Extension.SelectByID2(mirrorPlane, "PLANE", 0, 0, 0, true, 2, null, 0);
+
+        var feature = model.FeatureManager.InsertMirrorFeature(true, geomPattern, merge, false) as Feature;
+        return new { ok = feature != null, featureName = feature?.Name, mirrorPlane, mirroredFeatureCount = selectedCount };
+    }
+
+    private static object CircularPattern(JsonElement payload)
+    {
+        var app = AttachOrLaunch(false, ensureVisible: false);
+        ModelDoc2 model = RequireActiveModel(app);
+        string axisName = payload.GetProperty("axis").GetString()!;
+        int count = payload.GetProperty("count").GetInt32();
+        double angle = payload.GetProperty("angle").GetDouble();
+        bool equalSpacing = payload.TryGetProperty("equalSpacing", out var es) ? es.GetBoolean() : true;
+        string[] featureNames = payload.GetProperty("features").EnumerateArray().Select(e => e.GetString()!).ToArray();
+
+        model.ClearSelection2(true);
+        int selectedCount = 0;
+        foreach (string name in featureNames)
+        {
+            bool sel = model.Extension.SelectByID2(name, "BODYFEATURE", 0, 0, 0, selectedCount > 0, 1, null, 0);
+            if (sel) selectedCount++;
+        }
+        model.Extension.SelectByID2(axisName, "AXIS", 0, 0, 0, true, 16, null, 0);
+
+        var feature = model.FeatureManager.FeatureCircularPattern4(count, angle, false, "", false, equalSpacing, false) as Feature;
+        return new { ok = feature != null, featureName = feature?.Name, count, angle };
+    }
+
+    private static object LinearPattern(JsonElement payload)
+    {
+        var app = AttachOrLaunch(false, ensureVisible: false);
+        ModelDoc2 model = RequireActiveModel(app);
+        string dir1 = payload.GetProperty("direction1").GetString()!;
+        int d1Count = payload.GetProperty("d1Count").GetInt32();
+        double d1Spacing = payload.GetProperty("d1Spacing").GetDouble();
+        string? dir2 = payload.TryGetProperty("direction2", out var d2e) ? d2e.GetString() : null;
+        int d2Count = payload.TryGetProperty("d2Count", out var d2c) ? d2c.GetInt32() : 1;
+        double d2Spacing = payload.TryGetProperty("d2Spacing", out var d2s) ? d2s.GetDouble() : 0.0;
+        string[] featureNames = payload.GetProperty("features").EnumerateArray().Select(e => e.GetString()!).ToArray();
+
+        model.ClearSelection2(true);
+        int selectedCount = 0;
+        foreach (string name in featureNames)
+        {
+            bool sel = model.Extension.SelectByID2(name, "BODYFEATURE", 0, 0, 0, selectedCount > 0, 4, null, 0);
+            if (sel) selectedCount++;
+        }
+        model.Extension.SelectByID2(dir1, "EDGE", 0, 0, 0, true, 1, null, 0);
+        if (dir2 != null)
+            model.Extension.SelectByID2(dir2, "EDGE", 0, 0, 0, true, 2, null, 0);
+
+        var feature = model.FeatureManager.FeatureLinearPattern4(d1Count, d1Spacing, d2Count, d2Spacing, false, false, "", "", false, false, false, false, false, false, false, false, false, false, 0.0, 0.0) as Feature;
+        return new { ok = feature != null, featureName = feature?.Name, d1Count, d1Spacing, d2Count, d2Spacing };
+    }
+
+    private static object LoftBoss(JsonElement payload)
+    {
+        var app = AttachOrLaunch(false, ensureVisible: false);
+        ModelDoc2 model = RequireActiveModel(app);
+        string[] profileNames = payload.GetProperty("profiles").EnumerateArray().Select(e => e.GetString()!).ToArray();
+        string[] guideNames = payload.TryGetProperty("guides", out var ge) ? ge.EnumerateArray().Select(e => e.GetString()!).ToArray() : Array.Empty<string>();
+        bool mergeResult = payload.TryGetProperty("mergeResult", out var mr) ? mr.GetBoolean() : true;
+
+        model.ClearSelection2(true);
+        int profileCount = 0;
+        foreach (string name in profileNames)
+        {
+            bool sel = model.Extension.SelectByID2(name, "SKETCH", 0, 0, 0, profileCount > 0, 1, null, 0);
+            if (sel) profileCount++;
+        }
+        int guideCount = 0;
+        foreach (string name in guideNames)
+        {
+            bool sel = model.Extension.SelectByID2(name, "SKETCH", 0, 0, 0, true, 2, null, 0);
+            if (sel) guideCount++;
+        }
+
+        var feature = model.FeatureManager.InsertProtrusionBlend2(false, false, false, 1.0, (short)6, (short)6, 1.0, 1.0, true, true, false, 0.0, 0.0, (short)0, mergeResult, true, true, 2) as Feature;
+        return new { ok = feature != null, featureName = feature?.Name, profileCount, guideCount };
+    }
+
+    private static object SweepBoss(JsonElement payload)
+    {
+        var app = AttachOrLaunch(false, ensureVisible: false);
+        ModelDoc2 model = RequireActiveModel(app);
+        string profileName = payload.GetProperty("profile").GetString()!;
+        string pathName = payload.GetProperty("path").GetString()!;
+        bool mergeResult = payload.TryGetProperty("mergeResult", out var mr) ? mr.GetBoolean() : true;
+
+        model.ClearSelection2(true);
+        model.Extension.SelectByID2(profileName, "SKETCH", 0, 0, 0, false, 1, null, 0);
+        model.Extension.SelectByID2(pathName, "SKETCH", 0, 0, 0, true, 4, null, 0);
+
+        var feature = model.FeatureManager.InsertProtrusionSwept3(false, false, (short)0, false, false, (short)0, (short)0, false, 0.0, 0.0, (short)0, (short)0, mergeResult, true, true, 0.0, false) as Feature;
+        return new { ok = feature != null, featureName = feature?.Name, profile = profileName, path = pathName };
+    }
+
+    private static object Rib(JsonElement payload)
+    {
+        var app = AttachOrLaunch(false, ensureVisible: false);
+        ModelDoc2 model = RequireActiveModel(app);
+        string sketchName = payload.GetProperty("sketch").GetString()!;
+        double thickness = payload.GetProperty("thickness").GetDouble();
+        int thicknessType = payload.TryGetProperty("thicknessType", out var tt) ? tt.GetInt32() : 0;
+        bool flip = payload.TryGetProperty("flip", out var f) && f.GetBoolean();
+        bool draftEnable = payload.TryGetProperty("draftEnable", out var de) && de.GetBoolean();
+
+        // Close any active sketch first
+        if (GetActiveSketch(model) != null)
+        {
+            model.SketchManager.InsertSketch(true);
+        }
+
+        model.ClearSelection2(true);
+        
+        // Try to select the sketch with different name variations
+        bool selected = model.Extension.SelectByID2(sketchName, "SKETCH", 0, 0, 0, false, 0, null, 0);
+        if (!selected)
+        {
+            // Try Chinese name variations
+            string[] sketchVariations = { "草图1", "草图2", "草图3", "草图4", "草图5" };
+            foreach (var variation in sketchVariations)
+            {
+                if (model.Extension.SelectByID2(variation, "SKETCH", 0, 0, 0, false, 0, null, 0))
+                {
+                    selected = true;
+                    sketchName = variation;
+                    break;
+                }
+            }
+        }
+
+        if (!selected)
+        {
+            return new { ok = false, reason = "sketch_not_found", sketch = sketchName };
+        }
+
+        int featureCountBefore = CollectFeatureSummaries(model).Count;
+        string lastError = "";
+        try
+        {
+            model.FeatureManager.InsertRib(false, flip, thickness, 0, false, draftEnable, false, 0.0, true, false);
+        }
+        catch (Exception ex)
+        {
+            lastError = ex.Message;
+        }
+        
+        Feature? feature = null;
+        if (CollectFeatureSummaries(model).Count > featureCountBefore)
+            feature = GetLastFeature(model);
+
+        return new { ok = feature != null, featureName = feature?.Name, thickness, sketch = sketchName, lastError };
+    }
+
+    // Phase 3: Assembly
+
+    private static object NewAssembly(JsonElement payload)
+    {
+        var app = AttachOrLaunch(true, ensureVisible: false);
+        string templatePath = payload.TryGetProperty("templatePath", out var tp) ? tp.GetString() ?? string.Empty : @"C:\ProgramData\SOLIDWORKS\SOLIDWORKS 2025\templates\gb_assembly.asmdot";
+        if (!File.Exists(templatePath))
+            return new { ok = false, reason = "template_not_found", templatePath };
+
+        ModelDoc2? doc = app.NewDocument(templatePath, (int)swDocumentTypes_e.swDocASSEMBLY, 0.0, 0.0) as ModelDoc2;
+        if (doc != null) { CachedDocumentTitle = doc.GetTitle(); ActivateDocument(app, CachedDocumentTitle); }
+        return new { ok = doc != null, templatePath, activeTitle = doc?.GetTitle() };
+    }
+
+    private static object AddComponent(JsonElement payload)
+    {
+        var app = AttachOrLaunch(false, ensureVisible: false);
+        ModelDoc2 model = RequireActiveModel(app);
+        AssemblyDoc? assy = model as AssemblyDoc;
+        if (assy == null) return new { ok = false, reason = "not_assembly_document" };
+
+        string filePath = payload.GetProperty("filePath").GetString()!;
+        string configName = payload.TryGetProperty("configName", out var cn) ? cn.GetString() ?? "" : "";
+        double x = payload.TryGetProperty("x", out var xe) ? xe.GetDouble() : 0.0;
+        double y = payload.TryGetProperty("y", out var ye) ? ye.GetDouble() : 0.0;
+        double z = payload.TryGetProperty("z", out var ze) ? ze.GetDouble() : 0.0;
+
+        if (!File.Exists(filePath))
+            return new { ok = false, reason = "file_not_found", filePath };
+
+        Component2? comp = null;
+        string attempt = "AddComponent5";
+        string lastError = "";
+
+        // Attempt 1: AddComponent5
+        try
+        {
+            comp = assy.AddComponent5(filePath, 0, configName, false, "", x, y, z) as Component2;
+        }
+        catch (Exception ex) { lastError = ex.Message; }
+
+        // Attempt 2: AddComponent4
+        if (comp == null)
+        {
+            attempt = "AddComponent4";
+            try
+            {
+                comp = assy.AddComponent4(filePath, configName, x, y, z) as Component2;
+            }
+            catch (Exception ex) { lastError = ex.Message; }
+        }
+
+        // Attempt 3: AddComponent3
+        if (comp == null)
+        {
+            attempt = "AddComponent3";
+            try
+            {
+                object transforms = new double[] { 1, 0, 0, 0, 1, 0, 0, 0, 1, x, y, z };
+                object[] names = new object[] { filePath };
+                object[] trans = new object[] { transforms };
+                assy.AddComponents3(names, trans, null);
+                var components = assy.GetComponents(false) as object[];
+                if (components != null && components.Length > 0)
+                    comp = components[components.Length - 1] as Component2;
+            }
+            catch (Exception ex) { lastError = ex.Message; }
+        }
+
+        // Attempt 4: AddComponent (simple - returns bool)
+        if (comp == null)
+        {
+            attempt = "AddComponent";
+            try
+            {
+                bool added = assy.AddComponent(filePath, x, y, z);
+                if (added)
+                {
+                    var components = assy.GetComponents(false) as object[];
+                    if (components != null && components.Length > 0)
+                        comp = components[components.Length - 1] as Component2;
+                }
+                else
+                {
+                    lastError = "AddComponent returned false";
+                }
+            }
+            catch (Exception ex) { lastError = ex.Message; }
+        }
+
+        // Check if component was added by counting components
+        if (comp == null)
+        {
+            var components = assy.GetComponents(false) as object[];
+            if (components != null && components.Length > 0)
+            {
+                comp = components[components.Length - 1] as Component2;
+                attempt += "_fallback_last_component";
+            }
+        }
+
+        return new { ok = comp != null, componentName = comp?.Name2, filePath, attempt, lastError };
+    }
+
+    private static object AddMate(JsonElement payload)
+    {
+        var app = AttachOrLaunch(false, ensureVisible: false);
+        ModelDoc2 model = RequireActiveModel(app);
+        AssemblyDoc? assy = model as AssemblyDoc;
+        if (assy == null) return new { ok = false, reason = "not_assembly_document" };
+
+        int mateType = payload.GetProperty("mateType").GetInt32();
+        int alignType = payload.TryGetProperty("alignType", out var at) ? at.GetInt32() : 0;
+        bool flip = payload.TryGetProperty("flip", out var f) && f.GetBoolean();
+        double distance = payload.TryGetProperty("distance", out var d) ? d.GetDouble() : 0.0;
+        double angle = payload.TryGetProperty("angle", out var a) ? a.GetDouble() : 0.0;
+        string[] entityRefs = payload.GetProperty("entities").EnumerateArray().Select(e => e.GetString()!).ToArray();
+
+        model.ClearSelection2(true);
+        int selectedCount = 0;
+        foreach (string entityRef in entityRefs)
+        {
+            string[] parts = entityRef.Split('@');
+            string entityName = parts[0];
+            string entityType = parts.Length > 1 ? parts[1] : "FACE";
+            bool sel = model.Extension.SelectByID2(entityName, entityType, 0, 0, 0, selectedCount > 0, 0, null, 0);
+            if (sel) selectedCount++;
+        }
+
+        int errorStatus = 0;
+        var mate = assy.AddMate3(mateType, alignType, flip, distance, distance, distance, 1.0, 1.0, angle, angle, angle, false, out errorStatus);
+        return new { ok = mate != null, mateType, alignType, selectedEntities = selectedCount, errorStatus };
+    }
+
+    private static object AddExplodeStep(JsonElement payload)
+    {
+        var app = AttachOrLaunch(false, ensureVisible: false);
+        ModelDoc2 model = RequireActiveModel(app);
+        AssemblyDoc? assy = model as AssemblyDoc;
+        if (assy == null) return new { ok = false, reason = "not_assembly_document" };
+
+        string[] componentNames = payload.GetProperty("components").EnumerateArray().Select(e => e.GetString()!).ToArray();
+        double dx = payload.TryGetProperty("dx", out var dxe) ? dxe.GetDouble() : 0.0;
+        double dy = payload.TryGetProperty("dy", out var dye) ? dye.GetDouble() : 0.0;
+        double dz = payload.TryGetProperty("dz", out var dze) ? dze.GetDouble() : 0.0;
+
+        model.ClearSelection2(true);
+        int selectedCount = 0;
+        foreach (string name in componentNames)
+        {
+            bool sel = model.Extension.SelectByID2(name, "COMPONENT", 0, 0, 0, selectedCount > 0, 0, null, 0);
+            if (sel) selectedCount++;
+        }
+
+        assy.AutoExplode();
+        return new { ok = true, componentCount = selectedCount, translation = new { dx, dy, dz } };
+    }
+
+    private static object AddDimensionV2(JsonElement payload)
+    {
+        var app = AttachOrLaunch(false, ensureVisible: false);
+        ModelDoc2 model = RequireActiveModel(app);
+        double x = payload.GetProperty("x").GetDouble();
+        double y = payload.GetProperty("y").GetDouble();
+        double z = payload.GetProperty("z").GetDouble();
+        string[] entityRefs = payload.GetProperty("entities").EnumerateArray().Select(e => e.GetString()!).ToArray();
+
+        model.ClearSelection2(true);
+        int selectedCount = 0;
+        foreach (string entityRef in entityRefs)
+        {
+            string[] parts = entityRef.Split('@');
+            string entityName = parts[0];
+            string entityType = parts.Length > 1 ? parts[1] : "SKETCHSEGMENT";
+            bool sel = model.Extension.SelectByID2(entityName, entityType, 0, 0, 0, selectedCount > 0, 0, null, 0);
+            if (sel) selectedCount++;
+        }
+
+        bool prevToggle = app.GetUserPreferenceToggle((int)swUserPreferenceToggle_e.swInputDimValOnCreate);
+        app.SetUserPreferenceToggle((int)swUserPreferenceToggle_e.swInputDimValOnCreate, false);
+        var dim = model.AddDimension2(x, y, z);
+        app.SetUserPreferenceToggle((int)swUserPreferenceToggle_e.swInputDimValOnCreate, prevToggle);
+
+        double? value = null;
+        if (dim != null)
+        {
+            try
+            {
+                var swDim = dim as IDimension;
+                if (swDim != null)
+                {
+                    object result = swDim.GetSystemValue3((int)swInConfigurationOpts_e.swThisConfiguration, null);
+                    if (result is double d) value = d;
+                    else if (result != null) value = Convert.ToDouble(result);
+                }
+            }
+            catch { }
+        }
+        return new { ok = dim != null, selectedEntities = selectedCount, currentValue = value };
+    }
+
+    private static object GetMassProperties(JsonElement _payload)
+    {
+        var app = AttachOrLaunch(false, ensureVisible: false);
+        ModelDoc2 model = RequireActiveModel(app);
+        var massProp = model.Extension.CreateMassProperty();
+        if (massProp == null) return new { ok = false, reason = "mass_property_unavailable" };
+
+        double mass = massProp.Mass;
+        double volume = massProp.Volume;
+        double surfaceArea = massProp.SurfaceArea;
+        object? comObj = massProp.CenterOfMass;
+        double[]? com = null;
+        if (comObj is Array comArray && comArray.Length >= 3)
+        {
+            com = comArray.Cast<object?>().Where(v => v != null).Select(v => Convert.ToDouble(v)).ToArray();
+        }
+        return new { ok = true, mass, volume, surfaceArea, centerOfMass = com };
+    }
+
+    // Phase 4: Export & Analysis
+
+    private static object ExportFile(JsonElement payload)
+    {
+        var app = AttachOrLaunch(false, ensureVisible: false);
+        ModelDoc2 model = RequireActiveModel(app);
+        string outputPath = payload.GetProperty("outputPath").GetString()!;
+        int version = payload.TryGetProperty("version", out var v) ? v.GetInt32() : 0;
+        int options = payload.TryGetProperty("options", out var o) ? o.GetInt32() : 0;
+
+        string? dir = Path.GetDirectoryName(outputPath);
+        if (dir != null && !Directory.Exists(dir)) Directory.CreateDirectory(dir);
+
+        int errors = 0;
+        int warnings = 0;
+        bool saved = model.Extension.SaveAs2(outputPath, version, options, null, "", false, ref errors, ref warnings);
+        return new { ok = saved || File.Exists(outputPath), outputPath, errors, warnings, exists = File.Exists(outputPath) };
+    }
+
+    private static object CheckInterference(JsonElement payload)
+    {
+        var app = AttachOrLaunch(false, ensureVisible: false);
+        ModelDoc2 model = RequireActiveModel(app);
+        AssemblyDoc? assy = model as AssemblyDoc;
+        if (assy == null) return new { ok = false, reason = "not_assembly_document" };
+
+        bool coincidenceIsInterference = payload.TryGetProperty("coincidenceIsInterference", out var ci) && ci.GetBoolean();
+        object? pComp = null;
+        object? pFace = null;
+        assy.ToolsCheckInterference2(0, null, coincidenceIsInterference, out pComp, out pFace);
+        object[]? interferences = pComp as object[];
+        return new { ok = true, interferenceCount = interferences?.Length ?? 0, hasInterference = (interferences?.Length ?? 0) > 0 };
+    }
+
+    private static object MeasureDistance(JsonElement payload)
+    {
+        var app = AttachOrLaunch(false, ensureVisible: false);
+        ModelDoc2 model = RequireActiveModel(app);
+        string[] entityRefs = payload.GetProperty("entities").EnumerateArray().Select(e => e.GetString()!).ToArray();
+
+        model.ClearSelection2(true);
+        int selectedCount = 0;
+        foreach (string entityRef in entityRefs)
+        {
+            string[] parts = entityRef.Split('@');
+            string entityName = parts[0];
+            string entityType = parts.Length > 1 ? parts[1] : "FACE";
+            bool sel = model.Extension.SelectByID2(entityName, entityType, 0, 0, 0, selectedCount > 0, 0, null, 0);
+            if (sel) selectedCount++;
+        }
+
+        var measure = model.Extension.CreateMeasure();
+        if (measure == null) return new { ok = false, reason = "measure_unavailable" };
+
+        bool calculated = measure.Calculate(null);
+        double? distance = null;
+        if (calculated) { try { distance = measure.Distance; } catch { } }
+        return new { ok = calculated, distance, selectedEntities = selectedCount };
+    }
+
+    private static object SetMaterial(JsonElement payload)
+    {
+        var app = AttachOrLaunch(false, ensureVisible: false);
+        ModelDoc2 model = RequireActiveModel(app);
+        PartDoc? part = model as PartDoc;
+        if (part == null) return new { ok = false, reason = "not_part_document" };
+
+        string database = payload.TryGetProperty("database", out var db) ? db.GetString() ?? "" : "";
+        string material = payload.GetProperty("material").GetString()!;
+        string config = payload.TryGetProperty("config", out var cfg) ? cfg.GetString() ?? "" : "";
+
+        part.SetMaterialPropertyName2(config, database, material);
+        string? currentDb = null;
+        string? currentMat = null;
+        try { currentMat = part.GetMaterialPropertyName2(config, out currentDb); } catch { }
+
+        return new { ok = string.Equals(currentMat, material, StringComparison.OrdinalIgnoreCase), database, material, currentDatabase = currentDb, currentMaterial = currentMat };
     }
 
     private static SldWorks AttachOrLaunch(bool create, bool ensureVisible)

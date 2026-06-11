@@ -14,21 +14,21 @@
 
   <ItemGroup>
     <Reference Include="SolidWorks.Interop.sldworks">
-      <HintPath>$(SolidWorksInstallDir)\SolidWorks.Interop.sldworks.dll</HintPath>
+      <HintPath>$(SolidWorksInstallDir)\api\redist\SolidWorks.Interop.sldworks.dll</HintPath>
       <Private>true</Private>
     </Reference>
     <Reference Include="SolidWorks.Interop.swconst">
-      <HintPath>$(SolidWorksInstallDir)\SolidWorks.Interop.swconst.dll</HintPath>
+      <HintPath>$(SolidWorksInstallDir)\api\redist\SolidWorks.Interop.swconst.dll</HintPath>
       <Private>true</Private>
     </Reference>
   </ItemGroup>
 
   <Target Name="EnsureSolidWorksInteropPresent" BeforeTargets="ResolveReferences">
     <Error
-      Condition="!Exists('$(SolidWorksInstallDir)\\SolidWorks.Interop.sldworks.dll')"
+      Condition="!Exists('$(SolidWorksInstallDir)\api\redist\SolidWorks.Interop.sldworks.dll')"
       Text="SolidWorks.Interop.sldworks.dll not found. Set /p:SolidWorksInstallDir=&lt;SOLIDWORKS install dir&gt; when building." />
     <Error
-      Condition="!Exists('$(SolidWorksInstallDir)\\SolidWorks.Interop.swconst.dll')"
+      Condition="!Exists('$(SolidWorksInstallDir)\api\redist\SolidWorks.Interop.swconst.dll')"
       Text="SolidWorks.Interop.swconst.dll not found. Set /p:SolidWorksInstallDir=&lt;SOLIDWORKS install dir&gt; when building." />
   </Target>
 </Project>

@@ -6,29 +6,69 @@
 
 # soildworks-mcp
 
-`soildworks-mcp` 是一个面向 Windows 的 SolidWorks MCP 服务器。它通过 Python stdio server 加 C# bridge 的方式，把本机的 SolidWorks COM 自动化能力暴露给 Codex、Claude Code 或其他支持 MCP 的客户端。
+`soildworks-mcp` 是一个面向 Windows 的 SolidWorks MCP 服务器。它通过 Python stdio server 加 C# bridge 的方式，把本机的 SolidWorks COM 自动化能力暴露给 Codex、Claude Code、opencode 或其他支持 MCP 的客户端。
 
 这个仓库已经整理成适合本地直接构建、可编辑安装、MCP 注册和真实主机验证的结构。
 
+## 致谢与归属
+
+本项目是基于多个开源项目的衍生作品。完整的归属链请见 [NOTICE.md](NOTICE.md)，
+许可条款请见 [LICENSE](LICENSE)。关键上游项目：
+
+- **[eyfel/mcp-server-solidworks](https://github.com/eyfel/mcp-server-solidworks)** - 原始架构 (MIT, 2025)
+- **[Xuan-BOMS/soildworks-mcp](https://github.com/Xuan-BOMS/soildworks-mcp)** - Windows 打包 (MIT, 2026)
+- **[xarial/codestack](https://github.com/xarial/codestack)** - SW API 参考 (MIT)
+- **[alisamsam/Solidworks-MCP](https://github.com/alisamsam/Solidworks-MCP)** - 设计模式 (MIT)
+
 ## 已可用能力
 
-当前代码库中已经实现并验证的能力包括：
+当前代码库中已经实现并验证的能力包括（共 47 个工具）：
 
-- 启动或附着到 SolidWorks
-- 检查 SolidWorks 进程和当前活动文档状态
-- 新建零件
+**文档与会话（8）**
+- 启动/附着/关闭 SolidWorks
+- 检查进程和活动文档状态
+- 新建零件和装配体
 - 打开和保存 `.SLDPRT` 文件
-- 在基准面上开始草图
+
+**草图实体（8）**
+- 在基准面或面上开始草图
+- 绘制直线、圆弧、正多边形、中心线
 - 创建中心矩形和圆
-- 创建凸台拉伸
-- 创建切除拉伸
-- 根据尺寸生成矩形块
-- 根据尺寸生成带孔板件
-- 检查活动零件的实体和特征历史
-- 对指定特征边应用圆角
-- 对指定特征边应用倒角
-- 通过 `design_from_prompt` 执行一句话 showcase 工作流
-- 通过 `create_feature_showcase_part` 执行一次调用的特征验证工作流
+
+**建模特征（8）**
+- 拉伸凸台/切除
+- 创建基准面（距离/角度/平行）
+- 放样、扫描凸台
+- 加强筋
+- 圆角/倒角
+- 检查实体和特征历史
+
+**阵列与镜像（3）**
+- 镜像特征
+- 圆周阵列
+- 线性阵列
+
+**装配体（6）**
+- 插入零部件
+- 配合（共心/重合/平行等）
+- 爆炸视图
+- 智能尺寸
+- 质量属性
+
+**导出与分析（5）**
+- 导出 STEP/IGES/STL 等
+- 干涉检查
+- 测量距离/角度
+- 设置材质
+
+**复合/高层（4）**
+- 矩形块/带孔板/特征展示
+- `design_from_prompt` 自然语言工作流
+
+**受控/受限（3）**
+- `combine_all_bodies` - 部分主机不稳定
+- `run_macro` - 故意禁用（VSTA 宏会崩溃 SW）
+- `add_dimension` - 已被 `add_dimension_v2` 替代
 
 ## 当前限制
 
@@ -46,7 +86,7 @@
 ```text
 soildworks-mcp/
 |- bridge/
-|  |- Program.cs
+|  |- Program.cs              # C# Bridge，含 36+ 命令
 |  |- SolidWorksBridge.csproj
 |- examples/
 |  |- codex-config.toml
@@ -58,15 +98,18 @@ soildworks-mcp/
 |  |- smoke_test.py
 |- src/
 |  |- solidworks_mcp/
-|     |- __init__.py
-|     |- __main__.py
-|     |- server.py
+     |- __init__.py
+     |- __main__.py
+     |- server.py              # Python MCP server，含 47 个 @mcp.tool()
 |- tests/
 |- server.py
 |- pyproject.toml
 |- requirements.txt
 |- README.md
-`- README.zh-CN.md
+|- README.zh-CN.md
+|- LICENSE                   # MIT 多版权
+|- NOTICE.md                  # 完整归属链
+|- CHANGELOG.md               # 版本历史
 ```
 
 ## 环境要求
@@ -252,6 +295,16 @@ python .\tests\tests_showcase_prompt_workflow.py
 
 ## 上游参考
 
-- 上游参考: [eyfel/mcp-server-solidworks](https://github.com/eyfel/mcp-server-solidworks)
-- License: MIT
-- 本仓库中的额外封装与宿主稳定性处理: `Xuan_Boms`
+- 直接上游: [Xuan-BOMS/soildworks-mcp](https://github.com/Xuan-BOMS/soildworks-mcp) (MIT, 2026)
+- 原始项目: [eyfel/mcp-server-solidworks](https://github.com/eyfel/mcp-server-solidworks) (MIT, 2025)
+
+本仓库在它们的基础上新增了 22 个 MCP 工具（共 47 个），已针对 SOLIDWORKS 2025 SP3（修订号 33.3.0）端到端验证。完整变更历史见 [CHANGELOG.md](CHANGELOG.md)，完整归属链见 [NOTICE.md](NOTICE.md)。
+
+## 贡献与衍生
+
+本项目接受尊重所有上游 MIT 许可条款的贡献。如提交 PR，请确保：
+
+1. 代码兼容 MIT 许可（或已获得其他许可的明确授权）
+2. 新依赖已记录在 `requirements.txt` 和 `pyproject.toml` 中
+3. 新工具遵循现有命名规范和返回格式
+4. 如引用了新的上游工作，请更新 `NOTICE.md` 归属链

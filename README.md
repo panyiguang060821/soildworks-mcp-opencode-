@@ -6,29 +6,76 @@
 
 # soildworks-mcp
 
-`soildworks-mcp` is a Windows-first MCP server for SolidWorks. It exposes a local SolidWorks COM automation workflow to Codex or any other MCP client through a Python stdio server plus a C# bridge.
+`soildworks-mcp` is a Windows-first MCP server for SolidWorks. It exposes a local SolidWorks COM automation workflow to Codex, Claude Code, opencode, or any other MCP client through a Python stdio server plus a C# bridge.
 
 This repository is structured for direct local build, editable install, MCP registration, and real host-side verification.
 
+## Acknowledgments
+
+This project is a derivative work building on multiple open-source projects.
+See [NOTICE.md](NOTICE.md) for the full attribution chain and
+[LICENSE](LICENSE) for license terms. Key upstream projects:
+
+- **[eyfel/mcp-server-solidworks](https://github.com/eyfel/mcp-server-solidworks)** - Original architecture (MIT, 2025)
+- **[Xuan-BOMS/soildworks-mcp](https://github.com/Xuan-BOMS/soildworks-mcp)** - Windows packaging (MIT, 2026)
+- **[xarial/codestack](https://github.com/xarial/codestack)** - SW API reference (MIT)
+- **[alisamsam/Solidworks-MCP](https://github.com/alisamsam/Solidworks-MCP)** - Design patterns (MIT)
+
 ## What Works
 
-The following capabilities are implemented and verified in the current codebase:
+The following capabilities are implemented and verified in the current codebase (47 tools total):
 
+**Document & Session (8)**
 - launch or attach to SolidWorks
+- close the running SolidWorks instance
 - inspect SolidWorks process and active document state
 - create a new part
 - open and save `.SLDPRT` files
+- create a new assembly document
+- get/set the current document
+
+**Sketch Entities (8)**
 - start a sketch on a base plane
+- start a sketch on a selected model face
+- draw line segments, arcs, regular polygons, and centerlines
 - create center rectangles and circles
-- create boss extrusions
-- create cut extrusions
+
+**Features (8)**
+- create boss extrusions and cut extrusions
+- create reference planes (distance/angle/parallel)
+- create lofted and swept bosses
+- create rib features
+- apply fillets and chamfers to feature edges
+- inspect bodies and feature history
+
+**Patterns & Mirrors (3)**
+- mirror features across a plane
+- circular pattern of features around an axis
+- linear pattern of features along an edge/axis
+
+**Assembly (6)**
+- insert components into an active assembly
+- add mates between entities (coincident/concentric/parallel/etc.)
+- create auto-explode views
+- add smart dimensions (VSTA-bypassing implementation)
+- get mass, volume, surface area, and center of mass
+
+**Export & Analysis (5)**
+- export to STEP, IGES, STL, Parasolid, etc.
+- check for interferences in assemblies
+- measure distance/angle between entities
+- set part material from database
+
+**Composite / High-level (4)**
 - build a rectangular block from dimensions
 - build a drilled plate from dimensions
-- inspect bodies and feature history of the active part
-- apply fillets to the edges owned by a feature
-- apply chamfers to the edges owned by a feature
-- run a one-sentence showcase workflow through `design_from_prompt`
-- run a one-call feature validation workflow through `create_feature_showcase_part`
+- build a feature-showcase part (boss + cut + fillet + chamfer + combine)
+- run a one-sentence natural-language showcase workflow through `design_from_prompt`
+
+**Guarded / Limited (3)**
+- `combine_all_bodies` - Exposed but reports unsupported state on some hosts
+- `run_macro` - Intentionally disabled (VSTA macro loader can crash SW)
+- `add_dimension` (original) - Replaced by `add_dimension_v2`
 
 ## Current Limitation
 
@@ -46,7 +93,7 @@ The rest of the showcase workflow remains usable and returns structured validati
 ```text
 soildworks-mcp/
 |- bridge/
-|  |- Program.cs
+|  |- Program.cs              # C# Bridge with 36+ commands
 |  |- SolidWorksBridge.csproj
 |- examples/
 |  |- codex-config.toml
@@ -58,15 +105,18 @@ soildworks-mcp/
 |  |- smoke_test.py
 |- src/
 |  |- solidworks_mcp/
-|     |- __init__.py
-|     |- __main__.py
-|     |- server.py
+     |- __init__.py
+     |- __main__.py
+     |- server.py              # Python MCP server with 47 @mcp.tool() registrations
 |- tests/
 |- server.py
 |- pyproject.toml
 |- requirements.txt
 |- README.md
-`- README.zh-CN.md
+|- README.zh-CN.md
+|- LICENSE                   # MIT with multi-copyright
+|- NOTICE.md                  # Full attribution chain
+|- CHANGELOG.md               # Version history
 ```
 
 ## Requirements
@@ -253,6 +303,20 @@ The synchronized code in this repository has already been updated to include:
 
 ## Upstream Reference
 
-- Upstream reference: [eyfel/mcp-server-solidworks](https://github.com/eyfel/mcp-server-solidworks)
-- License: MIT
-- Additional packaging and host-stability work in this repository: `Xuan_Boms`
+- Direct parent: [Xuan-BOMS/soildworks-mcp](https://github.com/Xuan-BOMS/soildworks-mcp) (MIT, 2026)
+- Original: [eyfel/mcp-server-solidworks](https://github.com/eyfel/mcp-server-solidworks) (MIT, 2025)
+
+This repository adds 22 new MCP tools (47 total) verified against SOLIDWORKS 2025
+SP3 (revision 33.3.0). See [CHANGELOG.md](CHANGELOG.md) for the full history and
+[NOTICE.md](NOTICE.md) for the complete attribution chain including all
+referenced upstream projects and API resources.
+
+## Provenance and Contributing
+
+This project accepts contributions that respect the MIT license terms of all
+upstream works. If you submit a pull request, please ensure:
+
+1. Your code is MIT-compatible (or you have explicit permission for other licenses)
+2. New dependencies are documented in `requirements.txt` and `pyproject.toml`
+3. New tools follow the existing naming conventions and return-format patterns
+4. The `NOTICE.md` attribution chain is updated if you reference new upstream work
