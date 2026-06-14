@@ -92,6 +92,11 @@ The rest of the showcase workflow remains usable and returns structured validati
 
 ```text
 soildworks-mcp/
+|- agent-harness/             # CLI-Anything harness wrapping the MCP server
+|  |- SOLIDWORKS.md           # Harness SOP
+|  |- setup.py
+|  |- cli_anything/solidworks/ # Click CLI + REPL + backend bridge
+|  |- skills/cli-anything-solidworks/SKILL.md
 |- bridge/
 |  |- Program.cs              # C# Bridge with 36+ commands
 |  |- SolidWorksBridge.csproj
@@ -105,9 +110,9 @@ soildworks-mcp/
 |  |- smoke_test.py
 |- src/
 |  |- solidworks_mcp/
-     |- __init__.py
-     |- __main__.py
-     |- server.py              # Python MCP server with 47 @mcp.tool() registrations
+      |- __init__.py
+      |- __main__.py
+      |- server.py              # Python MCP server with 47 @mcp.tool() registrations
 |- tests/
 |- server.py
 |- pyproject.toml
@@ -118,6 +123,28 @@ soildworks-mcp/
 |- NOTICE.md                  # Full attribution chain
 |- CHANGELOG.md               # Version history
 ```
+
+## CLI-Anything Harness (Experimental)
+
+This repository also ships a [CLI-Anything](https://github.com/HKUDS/CLI-Anything) harness
+that exposes the SolidWorks MCP server as a standalone CLI with JSON output and REPL:
+
+```powershell
+cd agent-harness
+pip install -e .
+
+cli-anything-solidworks --help
+cli-anything-solidworks --json status
+cli-anything-solidworks launch
+cli-anything-solidworks part new --template "C:\ProgramData\SOLIDWORKS\SOLIDWORKS 2025\templates\gb_part.prtdot"
+cli-anything-solidworks sketch plane "Front Plane"
+cli-anything-solidworks sketch rectangle 0 0 0.05 0.05
+cli-anything-solidworks feature extrude 0.01
+cli-anything-solidworks part save --path "C:\temp\block.sldprt"
+cli-anything-solidworks feature export "C:\temp\block.step"
+```
+
+See `agent-harness/cli_anything/solidworks/README.md` for the full command reference.
 
 ## Requirements
 

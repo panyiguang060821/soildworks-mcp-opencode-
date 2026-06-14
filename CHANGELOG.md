@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added - 2026-06-15 by panyiguang060821
+
+**CLI-Anything harness (experimental)** in `agent-harness/`:
+- Installs as `cli-anything-solidworks` via `pip install -e agent-harness`
+- Click-based CLI with `--json` output for agent consumption
+- REPL mode (`cli-anything-solidworks` with no arguments)
+- Command groups: `part`, `sketch`, `feature`, plus lifecycle commands
+- Wraps the SolidWorks MCP server tool functions through `utils/backend.py`
+- SKILL.md at `skills/cli-anything-solidworks/SKILL.md` for agent discovery
+- Verified end-to-end: launch → new part → sketch → extrude → save → export
+
 ### Added - 2026-06-11 by panyiguang060821
 
 **22 new MCP tools** (47 tools total, up from 25):
