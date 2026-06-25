@@ -7,8 +7,10 @@ import io
 import json
 import os
 from pathlib import Path
+import platform
 import re
 import subprocess
+import sys
 import threading
 import time
 from typing import Any
@@ -19,10 +21,48 @@ import pythoncom
 import win32com.client
 from mcp.server.fastmcp import FastMCP
 
-
 SERVER_NAME = "solidworks"
 SOLIDWORKS_PROG_ID = "SldWorks.Application"
 REPO_ROOT = Path(__file__).resolve().parents[2]
+
+# === Skill 模块导入 ===
+SKILL_SCRIPTS_DIR = REPO_ROOT.parent / "solidworks-automation-skill" / "scripts"
+if str(SKILL_SCRIPTS_DIR) not in sys.path:
+    sys.path.insert(0, str(SKILL_SCRIPTS_DIR))
+
+from sw_connect import mm as skill_mm, deg as skill_deg, connect_solidworks as skill_connect
+from sw_preflight import missing_com_dependencies, solidworks_installed
+from sw_assembly import (
+    add_component as skill_add_component,
+    add_concentric_mate_by_cylinders,
+    add_mate5_checked,
+    find_component_by_name,
+    get_component_feature_entity,
+    select_entities_for_mate,
+    get_components,
+    resolve_component,
+    collect_mate_feature_summary,
+    SW_MATE_COINCIDENT,
+    SW_MATE_CONCENTRIC,
+    SW_MATE_DISTANCE,
+)
+from sw_export import (
+    export_to_step, export_to_stl, export_to_iges,
+    export_to_parasolid, export_to_pdf, export_to_dxf,
+)
+from sw_appearance import set_component_appearance, set_document_appearance
+from sw_review import run_review
+from sw_motion import (
+    create_motion_study as skill_create_motion_study,
+    add_constant_speed_rotary_motor_by_cylinders,
+    calculate_and_play,
+    ensure_motion_type_library,
+)
+try:
+    import comtypes
+except ImportError:
+    comtypes = None
+
 BRIDGE_DLL = Path(
     os.environ.get(
         "SOLIDWORKS_MCP_BRIDGE_DLL",
@@ -52,6 +92,7 @@ DOC_TYPE_BY_SUFFIX = {
 
 mcp = FastMCP("SolidWorks MCP")
 
+_sw_global_lock = threading.RLock()
 _bridge_lock = threading.Lock()
 _bridge_process: subprocess.Popen[str] | None = None
 _launch_timeout_seconds = 60.0
@@ -453,55 +494,56 @@ def _run_bridge(command: str, payload: dict[str, Any] | None = None) -> dict[str
 
     request = json.dumps({"command": command, "payload": payload or {}}, ensure_ascii=False)
 
-    with _bridge_lock:
-        process = _get_bridge_process()
-        if process.stdin is None or process.stdout is None:
-            _shutdown_bridge()
-            return {
-                "ok": False,
-                "reason": "bridge_missing_stdio",
-                "command": command,
-            }
+    with _sw_global_lock:
+        with _bridge_lock:
+            process = _get_bridge_process()
+            if process.stdin is None or process.stdout is None:
+                _shutdown_bridge()
+                return {
+                    "ok": False,
+                    "reason": "bridge_missing_stdio",
+                    "command": command,
+                }
 
+            try:
+                process.stdin.write(request + "\n")
+                process.stdin.flush()
+                stdout = process.stdout.readline()
+            except Exception as exc:
+                _shutdown_bridge()
+                return {
+                    "ok": False,
+                    "reason": "bridge_io_failed",
+                    "command": command,
+                    "detail": str(exc),
+                }
+
+            if not stdout:
+                stderr = ""
+                if process.stderr is not None:
+                    stderr = process.stderr.read().strip()
+                returncode = process.poll()
+                _shutdown_bridge()
+                return {
+                    "ok": False,
+                    "reason": "bridge_command_failed",
+                    "command": command,
+                    "returncode": returncode,
+                    "stdout": "",
+                    "stderr": stderr,
+                }
+
+        stdout = stdout.strip()
         try:
-            process.stdin.write(request + "\n")
-            process.stdin.flush()
-            stdout = process.stdout.readline()
-        except Exception as exc:
-            _shutdown_bridge()
+            return json.loads(stdout or "{}")
+        except json.JSONDecodeError:
             return {
                 "ok": False,
-                "reason": "bridge_io_failed",
+                "reason": "bridge_invalid_json",
                 "command": command,
-                "detail": str(exc),
+                "stdout": stdout,
+                "stderr": "",
             }
-
-        if not stdout:
-            stderr = ""
-            if process.stderr is not None:
-                stderr = process.stderr.read().strip()
-            returncode = process.poll()
-            _shutdown_bridge()
-            return {
-                "ok": False,
-                "reason": "bridge_command_failed",
-                "command": command,
-                "returncode": returncode,
-                "stdout": "",
-                "stderr": stderr,
-            }
-
-    stdout = stdout.strip()
-    try:
-        return json.loads(stdout or "{}")
-    except json.JSONDecodeError:
-        return {
-            "ok": False,
-            "reason": "bridge_invalid_json",
-            "command": command,
-            "stdout": stdout,
-            "stderr": "",
-        }
 
 
 def _doc_summary(doc: Any) -> dict[str, Any]:
@@ -794,15 +836,14 @@ def inspect_active_part() -> dict[str, Any]:
 
 
 @mcp.tool()
-def apply_fillet_to_feature_edges(feature_name: str, radius: float) -> dict[str, Any]:
-    """Apply a constant-radius fillet to the edges owned by a named feature."""
-    return _run_bridge(
-        "apply_fillet_to_feature_edges",
-        {
-            "featureName": feature_name,
-            "radius": radius,
-        },
-    )
+def apply_fillet_to_feature_edges(feature_name: str, radius: float, z_min: float | None = None, z_max: float | None = None) -> dict[str, Any]:
+    """Apply a constant-radius fillet to the edges owned by a named feature, optionally filtered by edge bbox midpoint Z (in meters)."""
+    payload: dict[str, Any] = {"featureName": feature_name, "radius": radius}
+    if z_min is not None:
+        payload["zMin"] = z_min
+    if z_max is not None:
+        payload["zMax"] = z_max
+    return _run_bridge("apply_fillet_to_feature_edges", payload)
 
 
 @mcp.tool()
@@ -906,9 +947,14 @@ def draw_centerline(
 
 
 @mcp.tool()
-def create_sketch_on_face(face_name: str) -> dict[str, Any]:
-    """Start editing a sketch on a model face identified by name."""
-    return _run_bridge("create_sketch_on_face", {"faceName": face_name})
+def create_sketch_on_face(face_name: str, face_x: float = 0.0, face_y: float = 0.0, face_z: float = 0.0) -> dict[str, Any]:
+    """Start editing a sketch on a model face identified by name or position (face_x/y/z in meters)."""
+    return _run_bridge("create_sketch_on_face", {
+        "faceName": face_name,
+        "faceX": face_x,
+        "faceY": face_y,
+        "faceZ": face_z,
+    })
 
 
 # Phase 2: Advanced Features
@@ -1104,6 +1150,61 @@ def set_material(material: str, database: str = "", config: str = "") -> dict[st
     return _run_bridge("set_material", {
         "database": database, "material": material, "config": config,
     })
+
+
+def create_spur_gear(
+    module_mm: float,
+    teeth: int,
+    pressure_angle_deg: float = 20.0,
+    face_width_mm: float = 20.0,
+    bore_diameter_mm: float = 0.0,
+    save_path: str | None = None,
+) -> dict[str, Any]:
+    """Create an accurate spur gear using involute approximation and circular pattern."""
+    payload: dict[str, Any] = {
+        "moduleMm": module_mm,
+        "teeth": teeth,
+        "pressureAngleDeg": pressure_angle_deg,
+        "faceWidthMm": face_width_mm,
+        "boreDiameterMm": bore_diameter_mm,
+    }
+    if save_path:
+        payload["savePath"] = str(Path(save_path).expanduser().resolve())
+    return _run_bridge("create_spur_gear", payload)
+
+
+@mcp.tool()
+def create_gear_assembly(
+    pinion_path: str,
+    gear_path: str,
+    center_distance_mm: float,
+    save_path: str | None = None,
+) -> dict[str, Any]:
+    """Create a gear assembly with two spur gears at a given center distance."""
+    payload: dict[str, Any] = {
+        "pinionPath": str(Path(pinion_path).expanduser().resolve()),
+        "gearPath": str(Path(gear_path).expanduser().resolve()),
+        "centerDistanceMm": center_distance_mm,
+    }
+    if save_path:
+        payload["savePath"] = str(Path(save_path).expanduser().resolve())
+    return _run_bridge("create_gear_assembly", payload)
+
+
+@mcp.tool()
+def create_motion_study(
+    speed_rpm: float = 60.0,
+    component_name: str = "pinion",
+    axis_name: str | None = None,
+) -> dict[str, Any]:
+    """Create a basic motion study with a rotary motor on a component axis."""
+    payload: dict[str, Any] = {
+        "speedRpm": speed_rpm,
+        "componentName": component_name,
+    }
+    if axis_name:
+        payload["axisName"] = axis_name
+    return _run_bridge("create_motion_study", payload)
 
 
 @mcp.tool()
@@ -1584,6 +1685,591 @@ def design_from_prompt(prompt: str) -> dict[str, Any]:
         },
         "result": result,
     }
+
+
+# ========================================================================
+# Skill 增强工具集 — 通过 Python COM 直接调用 SolidWorks
+# ========================================================================
+
+
+def _create_empty_dispatch_variant():
+    """创建可传给 COM 接口的空 Dispatch 参数。"""
+    return win32com.client.VARIANT(pythoncom.VT_DISPATCH, None)
+
+
+def _sw_app_summary(doc) -> dict[str, Any]:
+    """Return a compact document summary (skill-style)."""
+    if doc is None:
+        return {"has_document": False}
+    try:
+        def _safe_get(obj, name):
+            member = getattr(obj, name, None)
+            if member is None:
+                return None
+            return member() if callable(member) else member
+
+        return {
+            "has_document": True,
+            "title": _safe_get(doc, "GetTitle"),
+            "path": _safe_get(doc, "GetPathName"),
+            "type": _safe_get(doc, "GetType"),
+        }
+    except Exception:
+        return {"has_document": False}
+
+
+def _sw_component_summary(component) -> dict[str, Any]:
+    """Return a compact component summary."""
+    try:
+        def _safe_get(obj, name):
+            member = getattr(obj, name, None)
+            if member is None:
+                return None
+            return member() if callable(member) else member
+
+        return {
+            "name": _safe_get(component, "Name2"),
+            "path": _safe_get(component, "GetPathName"),
+            "suppressed": bool(_safe_get(component, "IsSuppressed") or False),
+            "visible": _safe_get(component, "Visible"),
+        }
+    except Exception:
+        return {"name": "unknown"}
+
+
+def _sw_get(obj, name):
+    """获取 COM 属性/方法返回值，兼容属性即方法的情况。"""
+    member = getattr(obj, name, None)
+    if member is None:
+        return None
+    return member() if callable(member) else member
+
+
+def _sw_set_component_fixed(asm_model, component, fixed: bool = True) -> bool:
+    """Fix or float an assembly component through the active selection."""
+    asm_model.ClearSelection2(True)
+    selected = False
+    try:
+        selected = bool(component.Select4(False, _create_empty_dispatch_variant(), False))
+    except Exception:
+        selected = False
+    if not selected:
+        try:
+            selected = bool(
+                asm_model.Extension.SelectByID2(
+                    _sw_get(component, "Name2") or "",
+                    "COMPONENT",
+                    0, 0, 0, False, 0,
+                    _create_empty_dispatch_variant(), 0,
+                )
+            )
+        except Exception:
+            selected = False
+    if not selected:
+        raise RuntimeError(f"Failed to select component: {_sw_get(component, 'Name2')}")
+    member_name = "FixComponent" if fixed else "UnfixComponent"
+    result = _sw_get(asm_model, member_name)
+    asm_model.ClearSelection2(True)
+    return bool(result) if result is not None else True
+
+
+@mcp.tool()
+def solidworks_health_check(
+    start_solidworks: bool = False,
+    check_motion_type_library: bool = True,
+) -> dict[str, Any]:
+    """检查 SolidWorks 自动化环境的依赖、COM 注册和 Motion 类型库。"""
+    _co_initialize()
+    try:
+        with _sw_global_lock:
+            checks = {
+                "python_executable": sys.executable,
+                "python_version": sys.version.split()[0],
+                "platform": platform.platform(),
+                "missing_com_dependencies": missing_com_dependencies(),
+                "solidworks_detected": solidworks_installed(),
+            }
+            if check_motion_type_library:
+                motion_tlb = ensure_motion_type_library(raise_on_error=False)
+                checks["motion_type_library"] = motion_tlb
+                checks["motion_type_library_ready"] = bool(motion_tlb)
+            if start_solidworks:
+                app = _get_app(create=True)
+                active_doc = getattr(app, "ActiveDoc", None)
+                checks["solidworks_revision"] = _value_or_call(getattr(app, "RevisionNumber", None))
+                checks["active_document"] = _sw_app_summary(active_doc)
+            issues = []
+            if checks.get("missing_com_dependencies"):
+                issues.append("Missing Python COM dependencies.")
+            if not checks.get("solidworks_detected"):
+                issues.append("SolidWorks COM registration not detected.")
+            if check_motion_type_library and not checks.get("motion_type_library_ready"):
+                issues.append("Motion Study type library not found.")
+            return {"status": "ok" if not issues else "warning", "checks": checks, "issues": issues}
+    finally:
+        _co_uninitialize()
+
+
+@mcp.tool()
+def solidworks_create_basic_part(
+    shape: str = "cylinder",
+    output_path: str | None = None,
+    plane: str = "Front Plane",
+    width_mm: float = 80.0,
+    height_mm: float = 60.0,
+    radius_mm: float = 25.0,
+    depth_mm: float = 50.0,
+    color: str | None = None,
+) -> dict[str, Any]:
+    """创建一个简单的圆柱或盒体零件（纯 Python COM，不依赖 Bridge）。"""
+    _co_initialize()
+    try:
+        with _sw_global_lock:
+            from sw_connect import new_document as skill_new_doc, find_template
+            from sw_part import sketch, sketch_circle, sketch_rectangle, extrude_boss as skill_extrude
+
+            app = _get_app(create=True)
+            template = find_template(app, "part")
+            model = skill_new_doc(app, "part", template_path=template)
+            if model is None:
+                return {"ok": False, "reason": "new_document_failed"}
+
+            with sketch(model, plane) as sketch_name:
+                if shape == "cylinder":
+                    sketch_circle(model, 0.0, 0.0, skill_mm(radius_mm))
+                    shape_label = "cylinder"
+                else:
+                    sketch_rectangle(model, 0.0, 0.0, skill_mm(width_mm), skill_mm(height_mm))
+                    shape_label = "box"
+
+            feature = skill_extrude(model, sketch_name, skill_mm(depth_mm))
+            appearance_ok = None
+            if color:
+                appearance_ok = set_document_appearance(model, color)
+            save_ok = None
+            if output_path:
+                from sw_connect import save_document as skill_save
+                save_ok = skill_save(model, output_path)
+            model.ForceRebuild3(False)
+            return {
+                "ok": feature is not None,
+                "shape": shape_label,
+                "feature_created": feature is not None,
+                "appearance_ok": appearance_ok,
+                "saved": save_ok,
+                "output_path": output_path,
+                "document": _sw_app_summary(model),
+            }
+    except Exception as exc:
+        return {"ok": False, "error": str(exc), "error_type": type(exc).__name__}
+    finally:
+        _co_uninitialize()
+
+
+@mcp.tool()
+def solidworks_add_component_v2(
+    path: str,
+    x_mm: float = 0.0,
+    y_mm: float = 0.0,
+    z_mm: float = 0.0,
+    config_name: str = "",
+    fix_component: bool = False,
+) -> dict[str, Any]:
+    """向活动装配体添加零部件（增强版，使用 skill 的 AddComponent 逻辑）。"""
+    _co_initialize()
+    try:
+        with _sw_global_lock:
+            app = _get_app(create=False)
+            if app is None:
+                return {"ok": False, "reason": "solidworks_not_running"}
+            asm = getattr(app, "ActiveDoc", None)
+            if asm is None:
+                return {"ok": False, "reason": "no_active_document"}
+            if _sw_get(asm, "GetType") != 2:
+                return {"ok": False, "reason": "not_an_assembly"}
+            component = skill_add_component(asm, path, skill_mm(x_mm), skill_mm(y_mm), skill_mm(z_mm), config_name=config_name, sw=app)
+            if component is None:
+                return {"ok": False, "reason": "add_component_failed"}
+            resolve_component(component)
+            fixed = None
+            if fix_component:
+                fixed = _sw_set_component_fixed(asm, component, fixed=True)
+            return {
+                "ok": True,
+                "component": _sw_component_summary(component),
+                "fixed": fixed,
+                "component_count": len(get_components(asm) or []),
+                "document": _sw_app_summary(asm),
+            }
+    except Exception as exc:
+        return {"ok": False, "error": str(exc), "error_type": type(exc).__name__}
+    finally:
+        _co_uninitialize()
+
+
+@mcp.tool()
+def solidworks_set_component_fixed(
+    component_keyword: str,
+    fixed: bool = True,
+) -> dict[str, Any]:
+    """按组件名关键字固定或浮动装配体组件。"""
+    _co_initialize()
+    try:
+        with _sw_global_lock:
+            app = _get_app(create=False)
+            if app is None:
+                return {"ok": False, "reason": "solidworks_not_running"}
+            asm = getattr(app, "ActiveDoc", None)
+            if asm is None or _sw_get(asm, "GetType") != 2:
+                return {"ok": False, "reason": "not_an_assembly"}
+            component = find_component_by_name(asm, component_keyword)
+            ok = _sw_set_component_fixed(asm, component, fixed=fixed)
+            return {
+                "ok": ok,
+                "fixed": fixed,
+                "component": _sw_component_summary(component),
+                "document": _sw_app_summary(asm),
+            }
+    except Exception as exc:
+        return {"ok": False, "error": str(exc), "error_type": type(exc).__name__}
+    finally:
+        _co_uninitialize()
+
+
+def _plane_aliases(name: str) -> list[str]:
+    """返回平面名称的中英文候选列表。"""
+    PLANE_MAP = {
+        "Front Plane": ["Front Plane", "前视基准面"],
+        "Top Plane": ["Top Plane", "上视基准面"],
+        "Right Plane": ["Right Plane", "右视基准面"],
+        "前视基准面": ["前视基准面", "Front Plane"],
+        "上视基准面": ["上视基准面", "Top Plane"],
+        "右视基准面": ["右视基准面", "Right Plane"],
+    }
+    return PLANE_MAP.get(name, [name])
+
+
+@mcp.tool()
+def solidworks_add_coincident_mate(
+    component_a_keyword: str,
+    component_b_keyword: str,
+    feature_a_name: str = "Front Plane",
+    feature_b_name: str = "Front Plane",
+    mate_name: str | None = None,
+) -> dict[str, Any]:
+    """在两个组件的指定基准面/特征之间添加重合 Mate。"""
+    _co_initialize()
+    try:
+        with _sw_global_lock:
+            app = _get_app(create=False)
+            if app is None:
+                return {"ok": False, "reason": "solidworks_not_running"}
+            asm = getattr(app, "ActiveDoc", None)
+            if asm is None or _sw_get(asm, "GetType") != 2:
+                return {"ok": False, "reason": "not_an_assembly"}
+            component_a = find_component_by_name(asm, component_a_keyword)
+            component_b = find_component_by_name(asm, component_b_keyword)
+            entity_a = get_component_feature_entity(component_a, _plane_aliases(feature_a_name))
+            entity_b = get_component_feature_entity(component_b, _plane_aliases(feature_b_name))
+            select_entities_for_mate(asm, entity_a, entity_b, mark=1)
+            mate = add_mate5_checked(asm, SW_MATE_COINCIDENT, name=mate_name)
+            return {
+                "ok": mate is not None,
+                "mate_name": mate_name or (_sw_get(mate, "Name") if mate else None),
+                "component_a": _sw_get(component_a, "Name2"),
+                "component_b": _sw_get(component_b, "Name2"),
+                "mate_features": collect_mate_feature_summary(asm),
+            }
+    except Exception as exc:
+        return {"ok": False, "error": str(exc), "error_type": type(exc).__name__}
+    finally:
+        _co_uninitialize()
+
+
+@mcp.tool()
+def solidworks_add_distance_mate(
+    component_a_keyword: str,
+    component_b_keyword: str,
+    feature_a_name: str = "Front Plane",
+    feature_b_name: str = "Front Plane",
+    distance_mm: float = 0.0,
+    mate_name: str | None = None,
+) -> dict[str, Any]:
+    """在两个组件的指定基准面/特征之间添加距离 Mate。"""
+    _co_initialize()
+    try:
+        with _sw_global_lock:
+            app = _get_app(create=False)
+            if app is None:
+                return {"ok": False, "reason": "solidworks_not_running"}
+            asm = getattr(app, "ActiveDoc", None)
+            if asm is None or _sw_get(asm, "GetType") != 2:
+                return {"ok": False, "reason": "not_an_assembly"}
+            component_a = find_component_by_name(asm, component_a_keyword)
+            component_b = find_component_by_name(asm, component_b_keyword)
+            entity_a = get_component_feature_entity(component_a, _plane_aliases(feature_a_name))
+            entity_b = get_component_feature_entity(component_b, _plane_aliases(feature_b_name))
+            select_entities_for_mate(asm, entity_a, entity_b, mark=1)
+            mate = add_mate5_checked(asm, SW_MATE_DISTANCE, distance=skill_mm(distance_mm), name=mate_name)
+            return {
+                "ok": mate is not None,
+                "mate_name": mate_name or (_sw_get(mate, "Name") if mate else None),
+                "distance_mm": distance_mm,
+                "component_a": _sw_get(component_a, "Name2"),
+                "component_b": _sw_get(component_b, "Name2"),
+                "mate_features": collect_mate_feature_summary(asm),
+            }
+    except Exception as exc:
+        return {"ok": False, "error": str(exc), "error_type": type(exc).__name__}
+    finally:
+        _co_uninitialize()
+
+
+@mcp.tool()
+def solidworks_add_concentric_mate(
+    component_a_keyword: str,
+    component_b_keyword: str,
+    radius_a_min_mm: float = 0.0,
+    radius_a_max_mm: float | None = None,
+    radius_b_min_mm: float = 0.0,
+    radius_b_max_mm: float | None = None,
+    lock_rotation: bool = False,
+    mate_name: str | None = None,
+) -> dict[str, Any]:
+    """按圆柱面半径范围添加同心 Mate，可选择是否锁转。"""
+    _co_initialize()
+    try:
+        with _sw_global_lock:
+            app = _get_app(create=False)
+            if app is None:
+                return {"ok": False, "reason": "solidworks_not_running"}
+            asm = getattr(app, "ActiveDoc", None)
+            if asm is None or _sw_get(asm, "GetType") != 2:
+                return {"ok": False, "reason": "not_an_assembly"}
+            component_a = find_component_by_name(asm, component_a_keyword)
+            component_b = find_component_by_name(asm, component_b_keyword)
+            mate = add_concentric_mate_by_cylinders(
+                asm, component_a, component_b,
+                radius_a=(skill_mm(radius_a_min_mm), skill_mm(radius_a_max_mm) if radius_a_max_mm is not None else None),
+                radius_b=(skill_mm(radius_b_min_mm), skill_mm(radius_b_max_mm) if radius_b_max_mm is not None else None),
+                name=mate_name, lock_rotation=lock_rotation,
+            )
+            return {
+                "ok": mate is not None,
+                "mate_name": mate_name or (_sw_get(mate, "Name") if mate else None),
+                "lock_rotation": lock_rotation,
+                "component_a": _sw_get(component_a, "Name2"),
+                "component_b": _sw_get(component_b, "Name2"),
+                "mate_features": collect_mate_feature_summary(asm),
+            }
+    except Exception as exc:
+        return {"ok": False, "error": str(exc), "error_type": type(exc).__name__}
+    finally:
+        _co_uninitialize()
+
+
+@mcp.tool()
+def solidworks_set_appearance(
+    target: str = "document",
+    color: str = "#BFC4C8",
+    component_keyword: str | None = None,
+) -> dict[str, Any]:
+    """设置活动文档或指定组件的外观颜色（支持 #RRGGBB 或 preset 名称）。"""
+    _co_initialize()
+    try:
+        with _sw_global_lock:
+            app = _get_app(create=False)
+            if app is None:
+                return {"ok": False, "reason": "solidworks_not_running"}
+            model = getattr(app, "ActiveDoc", None)
+            if model is None:
+                return {"ok": False, "reason": "no_active_document"}
+            if target == "document":
+                ok = set_document_appearance(model, color)
+                component = None
+            elif target == "component":
+                if not component_keyword:
+                    return {"ok": False, "reason": "component_keyword_required"}
+                if _sw_get(model, "GetType") != 2:
+                    return {"ok": False, "reason": "not_an_assembly"}
+                component = find_component_by_name(model, component_keyword)
+                ok = set_component_appearance(component, color)
+            else:
+                return {"ok": False, "reason": f"unsupported_target: {target}"}
+            model.ForceRebuild3(False)
+            return {
+                "ok": bool(ok),
+                "target": target,
+                "color": color,
+                "component": _sw_component_summary(component) if component else None,
+                "document": _sw_app_summary(model),
+            }
+    except Exception as exc:
+        return {"ok": False, "error": str(exc), "error_type": type(exc).__name__}
+    finally:
+        _co_uninitialize()
+
+
+@mcp.tool()
+def solidworks_export_active(
+    output_path: str,
+    export_format: str = "step",
+    stl_quality: str = "fine",
+) -> dict[str, Any]:
+    """导出活动文档为 STEP/STL/IGES/Parasolid/PDF/DXF 格式。"""
+    _co_initialize()
+    try:
+        with _sw_global_lock:
+            app = _get_app(create=False)
+            if app is None:
+                return {"ok": False, "reason": "solidworks_not_running"}
+            model = getattr(app, "ActiveDoc", None)
+            if model is None:
+                return {"ok": False, "reason": "no_active_document"}
+            exporters = {
+                "step": lambda: export_to_step(model, output_path),
+                "stl": lambda: export_to_stl(model, output_path, quality=stl_quality),
+                "iges": lambda: export_to_iges(model, output_path),
+                "parasolid": lambda: export_to_parasolid(model, output_path),
+                "pdf": lambda: export_to_pdf(model, output_path),
+                "dxf": lambda: export_to_dxf(model, output_path),
+            }
+            exporter = exporters.get(export_format)
+            if exporter is None:
+                return {"ok": False, "reason": f"unsupported_format: {export_format}"}
+            success = bool(exporter())
+            return {
+                "ok": success,
+                "output_path": output_path,
+                "format": export_format,
+                "document": _sw_app_summary(model),
+            }
+    except Exception as exc:
+        return {"ok": False, "error": str(exc), "error_type": type(exc).__name__}
+    finally:
+        _co_uninitialize()
+
+
+@mcp.tool()
+def solidworks_review_active(
+    output_dir: str,
+    basename: str = "mcp_review",
+) -> dict[str, Any]:
+    """导出多视角 BMP 预览和 JSON 审查报告。"""
+    _co_initialize()
+    try:
+        with _sw_global_lock:
+            app = _get_app(create=False)
+            if app is None:
+                return {"ok": False, "reason": "solidworks_not_running"}
+            model = getattr(app, "ActiveDoc", None)
+            if model is None:
+                return {"ok": False, "reason": "no_active_document"}
+            report, report_path = run_review(model, output_dir, basename=basename)
+            return {
+                "ok": True,
+                "report_path": report_path,
+                "evaluation": report.get("evaluation"),
+                "checks": report.get("checks"),
+                "document": _sw_app_summary(model),
+            }
+    except Exception as exc:
+        return {"ok": False, "error": str(exc), "error_type": type(exc).__name__}
+    finally:
+        _co_uninitialize()
+
+
+@mcp.tool()
+def solidworks_add_rotary_motor(
+    shaft_component_keyword: str,
+    rotor_component_keyword: str,
+    shaft_radius_min_mm: float = 0.0,
+    shaft_radius_max_mm: float | None = None,
+    rotor_radius_min_mm: float = 0.0,
+    rotor_radius_max_mm: float | None = None,
+    rpm: float = 60.0,
+    study_name: str = "MCP_旋转马达算例",
+    motor_name: str = "MCP_匀速旋转马达",
+    duration_seconds: float = 4.0,
+    calculate: bool = True,
+    play: bool = False,
+) -> dict[str, Any]:
+    """在活动装配体中新建 Motion Study 并添加匀速旋转马达。"""
+    _co_initialize()
+    try:
+        with _sw_global_lock:
+            app = _get_app(create=False)
+            if app is None:
+                return {"ok": False, "reason": "solidworks_not_running"}
+            asm = getattr(app, "ActiveDoc", None)
+            if asm is None or _sw_get(asm, "GetType") != 2:
+                return {"ok": False, "reason": "not_an_assembly"}
+            shaft_comp = find_component_by_name(asm, shaft_component_keyword)
+            rotor_comp = find_component_by_name(asm, rotor_component_keyword)
+            study = skill_create_motion_study(asm, name=study_name, duration=duration_seconds)
+            feature = add_constant_speed_rotary_motor_by_cylinders(
+                study, shaft_component=shaft_comp, rotor_component=rotor_comp,
+                shaft_radius=(skill_mm(shaft_radius_min_mm), skill_mm(shaft_radius_max_mm) if shaft_radius_max_mm is not None else None),
+                rotor_radius=(skill_mm(rotor_radius_min_mm), skill_mm(rotor_radius_max_mm) if rotor_radius_max_mm is not None else None),
+                rpm=rpm, name=motor_name,
+            )
+            calculated = None
+            if calculate:
+                calculated = calculate_and_play(study, play=play)
+            return {
+                "ok": feature is not None,
+                "study_name": study_name,
+                "motor_name": motor_name,
+                "motor_feature_created": feature is not None,
+                "calculated": calculated,
+                "rpm": rpm,
+                "shaft_component": _sw_get(shaft_comp, "Name2"),
+                "rotor_component": _sw_get(rotor_comp, "Name2"),
+            }
+    except Exception as exc:
+        return {"ok": False, "error": str(exc), "error_type": type(exc).__name__}
+    finally:
+        _co_uninitialize()
+
+
+@mcp.tool()
+def solidworks_new_document(
+    doc_type: str = "part",
+    template_path: str | None = None,
+) -> dict[str, Any]:
+    """创建一个新的 SolidWorks 零件/装配体/工程图文档（使用 skill 的 NewDocument 逻辑）。"""
+    _co_initialize()
+    try:
+        with _sw_global_lock:
+            app = _get_app(create=True)
+            from sw_connect import new_document as skill_new_doc
+            model = skill_new_doc(app, doc_type, template_path=template_path)
+            return {"ok": model is not None, "document": _sw_app_summary(model)}
+    except Exception as exc:
+        return {"ok": False, "error": str(exc), "error_type": type(exc).__name__}
+    finally:
+        _co_uninitialize()
+
+
+@mcp.tool()
+def solidworks_save_document_v2(path: str | None = None) -> dict[str, Any]:
+    """保存活动文档（使用 skill 的 save_document 逻辑，支持自动查找模板路径）。"""
+    _co_initialize()
+    try:
+        with _sw_global_lock:
+            app = _get_app(create=False)
+            if app is None:
+                return {"ok": False, "reason": "solidworks_not_running"}
+            model = getattr(app, "ActiveDoc", None)
+            if model is None:
+                return {"ok": False, "reason": "no_active_document"}
+            from sw_connect import save_document as skill_save
+            success = skill_save(model, file_path=path)
+            return {"ok": bool(success), "path": path or _sw_get(model, "GetPathName"), "document": _sw_app_summary(model)}
+    except Exception as exc:
+        return {"ok": False, "error": str(exc), "error_type": type(exc).__name__}
+    finally:
+        _co_uninitialize()
 
 
 def main() -> None:

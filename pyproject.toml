@@ -14,7 +14,9 @@ authors = [
 ]
 dependencies = [
   "mcp>=1.26.0,<2.0.0",
-  "pywin32>=311"
+  "pywin32>=311",
+  "comtypes>=1.2.0",
+  "pydantic>=2.0"
 ]
 
 [project.scripts]

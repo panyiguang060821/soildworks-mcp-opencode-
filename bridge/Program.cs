@@ -142,6 +142,9 @@ internal static class Program
             "check_interference" => CheckInterference(payload),
             "measure_distance" => MeasureDistance(payload),
             "set_material" => SetMaterial(payload),
+            "create_spur_gear" => CreateSpurGear(payload),
+            "create_gear_assembly" => CreateGearAssembly(payload),
+            "create_motion_study" => CreateMotionStudy(payload),
             _ => throw new InvalidOperationException($"Unknown command: {command}")
         };
     }
@@ -151,7 +154,7 @@ internal static class Program
         var app = AttachOrLaunch(true, ensureVisible: false);
         string templatePath = payload.TryGetProperty("templatePath", out JsonElement templateElement)
             ? templateElement.GetString() ?? string.Empty
-            : @"C:\ProgramData\SOLIDWORKS\SOLIDWORKS 2023\templates\gb_part.prtdot";
+            : @"C:\ProgramData\SOLIDWORKS\SOLIDWORKS 2025\templates\gb_part.prtdot";
 
         if (!File.Exists(templatePath))
         {
@@ -453,13 +456,15 @@ internal static class Program
         string featureName = payload.GetProperty("featureName").GetString()
             ?? throw new InvalidOperationException("featureName is required.");
         double radius = payload.GetProperty("radius").GetDouble();
+        double? zMin = payload.TryGetProperty("zMin", out var zmEl) ? zmEl.GetDouble() : null;
+        double? zMax = payload.TryGetProperty("zMax", out var zxEl) ? zxEl.GetDouble() : null;
         Feature? feature = FindFeatureBySelector(model, featureName);
         if (feature == null)
         {
             return new { ok = false, reason = "feature_not_found", featureName };
         }
 
-        int selectedEdgeCount = SelectFeatureEdges(model, feature);
+        int selectedEdgeCount = SelectFeatureEdges(model, feature, zMin, zMax);
         if (selectedEdgeCount == 0)
         {
             return new { ok = false, reason = "feature_edges_not_found", featureName };
@@ -482,6 +487,8 @@ internal static class Program
             ok = filletFeature != null,
             featureName,
             radius,
+            zMin,
+            zMax,
             selectedEdgeCount,
             resultFeatureName = filletFeature?.Name,
         };
@@ -735,13 +742,16 @@ internal static class Program
         var app = AttachOrLaunch(false, ensureVisible: false);
         ModelDoc2 model = RequireActiveModel(app);
         string faceName = payload.GetProperty("faceName").GetString()!;
+        double px = payload.TryGetProperty("faceX", out var pxEl) ? pxEl.GetDouble() : 0.0;
+        double py = payload.TryGetProperty("faceY", out var pyEl) ? pyEl.GetDouble() : 0.0;
+        double pz = payload.TryGetProperty("faceZ", out var pzEl) ? pzEl.GetDouble() : 0.0;
 
-        bool selected = model.Extension.SelectByID2(faceName, "FACE", 0, 0, 0, false, 0, null, 0);
+        bool selected = model.Extension.SelectByID2(faceName, "FACE", px, py, pz, false, 0, null, 0);
         if (!selected)
-            return new { ok = false, reason = "face_not_found", faceName };
+            return new { ok = false, reason = "face_not_found", faceName, px, py, pz };
 
         model.SketchManager.InsertSketch(true);
-        return new { ok = true, faceName, hasActiveSketch = GetActiveSketch(model) != null };
+        return new { ok = true, faceName, px, py, pz, hasActiveSketch = GetActiveSketch(model) != null };
     }
 
     // Phase 2: Advanced Features
@@ -1862,7 +1872,7 @@ internal static class Program
         return Math.Abs((values[3] - values[0]) * (values[4] - values[1]) * (values[5] - values[2]));
     }
 
-    private static int SelectFeatureEdges(ModelDoc2 model, Feature feature)
+    private static int SelectFeatureEdges(ModelDoc2 model, Feature feature, double? zMin = null, double? zMax = null)
     {
         model.ClearSelection2(true);
         SelectionMgr selectionManager = model.SelectionManager as SelectionMgr
@@ -1880,6 +1890,25 @@ internal static class Program
                 if (edgeObject is not IEntity entity)
                 {
                     continue;
+                }
+                if (zMin.HasValue || zMax.HasValue)
+                {
+                    try
+                    {
+                        IEdge edge = (IEdge)entity;
+                        double[] paramsArr = (double[])edge.GetCurveParams();
+                        if (paramsArr != null && paramsArr.Length >= 6)
+                        {
+                            double sz = paramsArr[2];
+                            double ez = paramsArr[5];
+                            double zMid = (sz + ez) / 2.0;
+                            // Debug: log via System.Console (won't show but compile)
+                            System.Console.Error.WriteLine($"[DBG] edge params: {string.Join(",", paramsArr.Take(6).Select(p => p.ToString("F3")))}, zMid={zMid:F3}");
+                            if (zMin.HasValue && zMid < zMin.Value) continue;
+                            if (zMax.HasValue && zMid > zMax.Value) continue;
+                        }
+                    }
+                    catch { continue; }
                 }
 
                 nint edgeIdentity = Marshal.GetIUnknownForObject(edgeObject);
@@ -1927,6 +1956,305 @@ internal static class Program
         SketchPoint startPoint = (SketchPoint)line.GetStartPoint2();
         SketchPoint endPoint = (SketchPoint)line.GetEndPoint2();
         return Math.Abs(startPoint.X - endPoint.X) < 1e-9;
+    }
+
+    // Gear utilities
+
+    private static double DegToRad(double deg) => deg * Math.PI / 180.0;
+
+    private static double InvoluteX(double rb, double theta) => rb * (Math.Cos(theta) + theta * Math.Sin(theta));
+    private static double InvoluteY(double rb, double theta) => rb * (Math.Sin(theta) - theta * Math.Cos(theta));
+
+    private static void DeleteAllSketches(ModelDoc2 model)
+    {
+        Feature? feature = model.FirstFeature() as Feature;
+        while (feature != null)
+        {
+            Feature? next = feature.GetNextFeature() as Feature;
+            if (string.Equals(feature.GetTypeName2(), "ProfileFeature", StringComparison.OrdinalIgnoreCase))
+            {
+                try { model.Extension.SelectByID2(feature.Name, "SKETCH", 0, 0, 0, false, 0, null, 0); model.EditDelete(); } catch { }
+            }
+            feature = next;
+        }
+    }
+
+    private static object CreateSpurGear(JsonElement payload)
+    {
+        var app = AttachOrLaunch(true, ensureVisible: false);
+        double moduleMm = payload.GetProperty("moduleMm").GetDouble();
+        int teeth = payload.GetProperty("teeth").GetInt32();
+        double pressureAngleDeg = payload.TryGetProperty("pressureAngleDeg", out var pa) ? pa.GetDouble() : 20.0;
+        double faceWidthMm = payload.TryGetProperty("faceWidthMm", out var fw) ? fw.GetDouble() : 20.0;
+        double boreDiameterMm = payload.TryGetProperty("boreDiameterMm", out var bd) ? bd.GetDouble() : 0.0;
+        string? savePath = payload.TryGetProperty("savePath", out var sp) ? sp.GetString() : null;
+
+        double pitchDiameter = moduleMm * teeth;
+        double addendum = moduleMm;
+        double dedendum = 1.25 * moduleMm;
+        double outsideDiameter = pitchDiameter + 2.0 * addendum;
+        double rootDiameter = pitchDiameter - 2.0 * dedendum;
+        double baseDiameter = pitchDiameter * Math.Cos(DegToRad(pressureAngleDeg));
+        double rb = baseDiameter / 2.0;
+        double ra = outsideDiameter / 2.0;
+        double rf = rootDiameter / 2.0;
+        double halfToothAngle = Math.PI / (2.0 * teeth);
+        double wedgeAngle = 2.0 * Math.PI / teeth * 0.48;
+        double halfWedge = wedgeAngle / 2.0;
+        double r1 = rf / 1000.0;
+        double r2 = ra / 1000.0;
+
+        var newPartResult = NewPart(JsonDocument.Parse("{}").RootElement);
+        if (newPartResult is System.Collections.IDictionary dict && !(bool)dict["ok"]!)
+            return new { ok = false, reason = "new_part_failed" };
+
+        ModelDoc2 model = RequireActiveModel(app);
+
+        // Select front plane and sketch
+        bool selectedPlane = model.Extension.SelectByID2("Front Plane", "PLANE", 0, 0, 0, false, 0, null, 0);
+        if (!selectedPlane)
+            selectedPlane = model.Extension.SelectByID2("前视基准面", "PLANE", 0, 0, 0, false, 0, null, 0);
+        if (!selectedPlane)
+        {
+            Feature? frontPlaneFeature = FindFeatureByName(model, "Front Plane");
+            if (frontPlaneFeature == null)
+                frontPlaneFeature = FindFeatureByName(model, "前视基准面");
+            if (frontPlaneFeature != null)
+                frontPlaneFeature.Select2(false, 0);
+        }
+        model.SketchManager.InsertSketch(true);
+
+        // Build tooth profile from closed quadrilateral wedges, one per tooth, then extrude all at once.
+        for (int k = 0; k < teeth; k++)
+        {
+            double angle = 2.0 * Math.PI * k / teeth;
+            double c = Math.Cos(angle);
+            double s = Math.Sin(angle);
+            (double x, double y) rot(double px, double py) => (px * c - py * s, px * s + py * c);
+
+            var p1 = rot(r1 * Math.Cos(-halfWedge), r1 * Math.Sin(-halfWedge));
+            var p2 = rot(r2 * Math.Cos(-halfWedge * 0.6), r2 * Math.Sin(-halfWedge * 0.6));
+            var p3 = rot(r2 * Math.Cos(halfWedge * 0.6), r2 * Math.Sin(halfWedge * 0.6));
+            var p4 = rot(r1 * Math.Cos(halfWedge), r1 * Math.Sin(halfWedge));
+
+            model.SketchManager.CreateLine(p1.x, p1.y, 0.0, p2.x, p2.y, 0.0);
+            model.SketchManager.CreateLine(p2.x, p2.y, 0.0, p3.x, p3.y, 0.0);
+            model.SketchManager.CreateLine(p3.x, p3.y, 0.0, p4.x, p4.y, 0.0);
+            model.SketchManager.CreateLine(p4.x, p4.y, 0.0, p1.x, p1.y, 0.0);
+        }
+
+        model.SketchManager.InsertSketch(true);
+
+        // Extrude all tooth wedges
+        model.ClearSelection2(true);
+        string firstSketchName = FindLastSketchFeatureName(model) ?? "草图1";
+        model.Extension.SelectByID2(firstSketchName, "SKETCH", 0, 0, 0, false, 0, null, 0);
+        var toothFeature = model.FeatureManager.FeatureExtrusion3(true, false, false,
+            (int)swEndConditions_e.swEndCondBlind, (int)swEndConditions_e.swEndCondBlind,
+            faceWidthMm / 1000.0, 0.0, false, false, false, false, 0.0, 0.0,
+            false, false, false, false, true, true, true, 0, 0, false);
+        if (toothFeature == null)
+            return new { ok = false, reason = "tooth_extrude_failed" };
+        var part = model as PartDoc;
+        Body2[] bodies = part != null ? GetSolidBodies(part) : Array.Empty<Body2>();
+        if (bodies.Length >= 2)
+        {
+            try
+            {
+                model.FeatureManager.InsertCombineFeature(
+                    (int)swCombineBodiesOperationType_e.swCombineBodiesOperationAdd,
+                    bodies[0],
+                    bodies.Skip(1).Cast<object>().ToArray());
+            }
+            catch { }
+        }
+
+        // Bore hole
+        if (boreDiameterMm > 0.0)
+        {
+            selectedPlane = model.Extension.SelectByID2("Front Plane", "PLANE", 0, 0, 0, false, 0, null, 0);
+            if (!selectedPlane)
+                model.Extension.SelectByID2("前视基准面", "PLANE", 0, 0, 0, false, 0, null, 0);
+            model.SketchManager.InsertSketch(true);
+            model.SketchManager.CreateCircleByRadius(0.0, 0.0, 0.0, boreDiameterMm / 2000.0);
+            model.SketchManager.InsertSketch(true);
+            int sketchCountAfter = CollectFeatureSummaries(model).Count(f => string.Equals(f["typeName"] as string, "ProfileFeature", StringComparison.OrdinalIgnoreCase));
+            model.Extension.SelectByID2($"草图{sketchCountAfter}", "SKETCH", 0, 0, 0, false, 0, null, 0);
+            model.FeatureManager.FeatureCut(true, false, false,
+                (int)swEndConditions_e.swEndCondThroughAllBoth, (int)swEndConditions_e.swEndCondThroughAllBoth,
+                0.0, 0.0, false, false, false, false, 0.0, 0.0,
+                false, false, false, false, false, false, true);
+        }
+
+        string? savedPath = null;
+        if (!string.IsNullOrWhiteSpace(savePath))
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(savePath)!);
+            int errors = 0, warnings = 0;
+            model.Extension.SaveAs(savePath, 0, 0, null, ref errors, ref warnings);
+            savedPath = savePath;
+        }
+
+        return new
+        {
+            ok = true,
+            moduleMm,
+            teeth,
+            pressureAngleDeg,
+            faceWidthMm,
+            boreDiameterMm,
+            pitchDiameterMm = pitchDiameter,
+            outsideDiameterMm = outsideDiameter,
+            rootDiameterMm = rootDiameter,
+            baseDiameterMm = baseDiameter,
+            savedPath
+        };
+    }
+
+    private static object CreateGearAssembly(JsonElement payload)
+    {
+        var app = AttachOrLaunch(true, ensureVisible: false);
+        string? pinionPath = payload.TryGetProperty("pinionPath", out var pp) ? pp.GetString() : null;
+        string? gearPath = payload.TryGetProperty("gearPath", out var gp) ? gp.GetString() : null;
+        double centerDistanceMm = payload.GetProperty("centerDistanceMm").GetDouble();
+        string? savePath = payload.TryGetProperty("savePath", out var sp) ? sp.GetString() : null;
+
+        if (string.IsNullOrWhiteSpace(pinionPath) || !File.Exists(pinionPath))
+            return new { ok = false, reason = "pinion_not_found", pinionPath };
+        if (string.IsNullOrWhiteSpace(gearPath) || !File.Exists(gearPath))
+            return new { ok = false, reason = "gear_not_found", gearPath };
+
+        string pinionFileName = Path.GetFileName(pinionPath);
+        string gearFileName = Path.GetFileName(gearPath);
+
+        // Open both parts first so AddComponent5 can resolve them by file name.
+        int openErrors = 0, openWarnings = 0;
+        app.OpenDoc6(pinionPath, (int)swDocumentTypes_e.swDocPART, 0, "", ref openErrors, ref openWarnings);
+        app.OpenDoc6(gearPath, (int)swDocumentTypes_e.swDocPART, 0, "", ref openErrors, ref openWarnings);
+
+        var newAssyResult = NewAssembly(JsonDocument.Parse("{}").RootElement);
+        ModelDoc2 model = RequireActiveModel(app);
+        AssemblyDoc assy = (AssemblyDoc)model;
+
+        // Add pinion at origin
+        Component2? pinionComp = assy.AddComponent5(pinionFileName, 0, "", false, "", 0.0, 0.0, 0.0) as Component2;
+        if (pinionComp == null)
+            return new { ok = false, reason = "add_pinion_failed" };
+
+        // Add gear offset along X
+        Component2? gearComp = assy.AddComponent5(gearFileName, 0, "", false, "", centerDistanceMm / 1000.0, 0.0, 0.0) as Component2;
+        if (gearComp == null)
+            return new { ok = false, reason = "add_gear_failed" };
+
+        // Create a reference axis for the pinion by intersecting front/right planes of the assembly
+        model.ClearSelection2(true);
+        Feature? frontPlane = FindFeatureByName(model, "Front Plane") ?? FindFeatureByName(model, "前视基准面");
+        Feature? rightPlane = FindFeatureByName(model, "Right Plane") ?? FindFeatureByName(model, "右视基准面");
+        if (frontPlane == null || rightPlane == null)
+            return new { ok = false, reason = "assembly_planes_not_found" };
+        frontPlane.Select2(false, 0);
+        rightPlane.Select2(true, 0);
+        model.InsertAxis();
+        string? pinionAxisName = FindLastFeatureByType(model, "RefAxis")?.Name;
+
+        // Mate pinion temporary axis to assembly reference axis (coincident)
+        model.ClearSelection2(true);
+        model.Extension.SelectByID2($"轴1@{pinionComp.Name2}", "AXIS", 0, 0, 0, false, 1, null, 0);
+        if (pinionAxisName != null)
+            model.Extension.SelectByID2(pinionAxisName, "AXIS", 0, 0, 0, true, 1, null, 0);
+        assy.AddMate3((int)swMateType_e.swMateCOINCIDENT, 0, false, 0.0, 0.0, 0.0, 1.0, 1.0, 0.0, 0.0, 0.0, false, out _);
+
+        // Create a reference axis for the gear by offsetting right plane (parallel, constraint=4) and intersecting with front plane
+        model.ClearSelection2(true);
+        Feature? gearRightPlane = FindFeatureByName(model, "Right Plane") ?? FindFeatureByName(model, "右视基准面");
+        if (gearRightPlane == null)
+            return new { ok = false, reason = "right_plane_not_found" };
+        gearRightPlane.Select2(false, 0);
+        model.FeatureManager.InsertRefPlane(4, centerDistanceMm / 1000.0, 0, 0.0, 0, 0.0);
+        model.ForceRebuild3(false);
+        Feature? gearPlane = FindLastFeatureByType(model, "RefPlane");
+        if (gearPlane == null)
+            return new { ok = false, reason = "gear_ref_plane_failed" };
+
+        model.ClearSelection2(true);
+        frontPlane.Select2(false, 0);
+        gearPlane.Select2(true, 0);
+        model.InsertAxis();
+        string? gearAxisName = FindLastFeatureByType(model, "RefAxis")?.Name;
+
+        // Mate gear temporary axis to gear reference axis (coincident)
+        model.ClearSelection2(true);
+        model.Extension.SelectByID2($"轴1@{gearComp.Name2}", "AXIS", 0, 0, 0, false, 1, null, 0);
+        if (gearAxisName != null)
+            model.Extension.SelectByID2(gearAxisName, "AXIS", 0, 0, 0, true, 1, null, 0);
+        assy.AddMate3((int)swMateType_e.swMateCOINCIDENT, 0, false, 0.0, 0.0, 0.0, 1.0, 1.0, 0.0, 0.0, 0.0, false, out _);
+
+        // Align front faces of both gears (coincident)
+        model.ClearSelection2(true);
+        frontPlane.Select2(false, 0);
+        model.Extension.SelectByID2($"前视基准面@{pinionComp.Name2}", "PLANE", 0, 0, 0, true, 1, null, 0);
+        assy.AddMate3((int)swMateType_e.swMateCOINCIDENT, 0, false, 0.0, 0.0, 0.0, 1.0, 1.0, 0.0, 0.0, 0.0, false, out _);
+
+        if (!string.IsNullOrWhiteSpace(savePath))
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(savePath)!);
+            int errors = 0, warnings = 0;
+            model.Extension.SaveAs(savePath, 0, 0, null, ref errors, ref warnings);
+        }
+
+        return new
+        {
+            ok = true,
+            pinionPath,
+            gearPath,
+            centerDistanceMm,
+            pinionComponent = pinionComp?.Name2,
+            gearComponent = gearComp?.Name2,
+            savedPath = savePath
+        };
+    }
+
+    private static object CreateMotionStudy(JsonElement payload)
+    {
+        var app = AttachOrLaunch(false, ensureVisible: false);
+        ModelDoc2 model = RequireActiveModel(app);
+        AssemblyDoc assy = model as AssemblyDoc;
+        if (assy == null)
+            return new { ok = false, reason = "not_assembly_document" };
+
+        double speedRpm = payload.TryGetProperty("speedRpm", out var sr) ? sr.GetDouble() : 60.0;
+        string componentName = payload.TryGetProperty("componentName", out var cn) ? cn.GetString() ?? "pinion" : "pinion";
+        string axisName = payload.TryGetProperty("axisName", out var an) ? an.GetString() ?? $"轴1@{componentName}" : $"轴1@{componentName}";
+
+        try
+        {
+            // Try to access motion study manager via dynamic late binding
+            dynamic modelDocExtension = model.Extension;
+            dynamic motionStudyManager = modelDocExtension.GetMotionStudyManager();
+            if (motionStudyManager == null)
+                return new { ok = false, reason = "motion_study_manager_unavailable" };
+
+            dynamic motionStudy = motionStudyManager.CreateMotionStudy(0);
+            if (motionStudy == null)
+                return new { ok = false, reason = "create_motion_study_failed" };
+
+            // Add rotary motor on component axis
+            dynamic motorFeature = motionStudy.AddMotor(
+                1,
+                axisName,
+                componentName,
+                speedRpm * 2.0 * Math.PI / 60.0,
+                0.0);
+
+            motionStudy.MoveToTime(0.0);
+            motionStudy.Calculate();
+
+            return new { ok = motorFeature != null, motionStudyName = motionStudy.Name, speedRpm };
+        }
+        catch (Exception ex)
+        {
+            return new { ok = false, reason = "motion_study_exception", detail = ex.Message };
+        }
     }
 
     private static void WriteError(string code, string detail)
