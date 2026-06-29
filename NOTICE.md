@@ -34,18 +34,27 @@ order of dependency:
 ### 3. This Repository (Custom additions)
 - **URL**: https://github.com/panyiguang060821/soildworks-mcp-opencode-
 - **Copyright**: (c) 2026 panyiguang060821
-- **Role**: Added 22 new MCP tools (sketch entities, reference planes,
-  patterns, assembly operations, export, analysis). Verified end-to-end
-  against SOLIDWORKS 2025 SP3 (revision 33.3.0) on a Windows 11 host.
-- **Added tools** (47 total, 22 new):
-  - `draw_line`, `draw_arc`, `draw_polygon`, `draw_centerline`,
-    `create_sketch_on_face`
-  - `create_ref_plane`, `mirror_feature`, `circular_pattern`,
-    `linear_pattern`, `loft_boss`, `sweep_boss`, `rib`
-  - `new_assembly`, `add_component`, `add_mate`, `add_explode_step`,
-    `add_dimension_v2`, `get_mass_properties`
-  - `export_file`, `check_interference`, `measure_distance`,
-    `set_material`
+- **Role**: Added 35 new MCP tools (sketch entities, reference planes,
+  patterns, assembly operations, export, analysis, plus 13 skill-integrated
+  Python COM direct tools from solidworks-automation-skill). Verified
+  end-to-end against SOLIDWORKS 2025 SP3 (revision 33.3.0) on a Windows 11
+  host.
+- **Added tools** (60 total, 35 new):
+  - **Bridge phase 1-4** (22 tools): `draw_line`, `draw_arc`,
+    `draw_polygon`, `draw_centerline`, `create_sketch_on_face`,
+    `create_ref_plane`, `mirror_feature`, `circular_pattern`,
+    `linear_pattern`, `loft_boss`, `sweep_boss`, `rib`,
+    `new_assembly`, `add_component`, `add_mate`, `add_explode_step`,
+    `add_dimension_v2`, `get_mass_properties`, `export_file`,
+    `check_interference`, `measure_distance`, `set_material`
+  - **Skill-integrated** (13 tools via Python COM Direct):
+    `solidworks_health_check`, `solidworks_create_basic_part`,
+    `solidworks_add_component_v2`, `solidworks_set_component_fixed`,
+    `solidworks_add_coincident_mate`, `solidworks_add_distance_mate`,
+    `solidworks_add_concentric_mate`, `solidworks_set_appearance`,
+    `solidworks_export_active`, `solidworks_review_active`,
+    `solidworks_add_rotary_motor`, `solidworks_new_document`,
+    `solidworks_save_document_v2`
 
 ---
 

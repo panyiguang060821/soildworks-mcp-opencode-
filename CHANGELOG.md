@@ -7,6 +7,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added - 2026-06-29 by panyiguang060821
+
+**Merge solidworks-automation-skill Python COM tools** (60 tools total, up from 47):
+
+#### New Skill-Integrated Tools (13 tools via Python COM Direct)
+
+**Assembly & Mates (5)**
+- `solidworks_add_component_v2` - Enhanced AddComponent with AddComponent5/4 fallback
+- `solidworks_set_component_fixed` - Fix/float component by keyword
+- `solidworks_add_coincident_mate` - Coincident mate with EN/CN plane name support
+- `solidworks_add_distance_mate` - Distance mate with configurable distance
+- `solidworks_add_concentric_mate` - Concentric mate by cylinder face radius matching
+
+**Appearance & Export (3)**
+- `solidworks_set_appearance` - Set document/component color (#RRGGBB or preset)
+- `solidworks_export_active` - Multi-format export (STEP/STL/IGES/Parasolid/PDF/DXF)
+- `solidworks_review_active` - Multi-view BMP preview + JSON review report
+
+**Motion Study (1)**
+- `solidworks_add_rotary_motor` - Motion Study with constant-speed rotary motor
+
+**Document & Health (4)**
+- `solidworks_new_document` - New document with auto template detection
+- `solidworks_save_document_v2` - Save document with skill's save logic
+- `solidworks_create_basic_part` - One-shot cylinder/box part with color
+- `solidworks_health_check` - Environment check (COM deps, SW detection, Motion TLB)
+
+#### Architectural Changes
+- Unified global lock `_sw_global_lock` serializes Bridge (.NET) and Direct COM operations
+- `bridge/Program.cs` - Enhanced gear commands, template path 2023→2025, zMin/zMax fillet params
+- `pyproject.toml` - Added `comtypes>=1.2.0`, `pydantic>=2.0` dependencies
+- Path for skill scripts (`solidworks-automation-skill/`) is resolved relative to repo root
+- COM attribute compatibility helper `_sw_get(obj, name)` handles pywin32 property/method variants
+- Plane name alias `_plane_aliases()` supports both English and Chinese reference plane names
+
 ### Added - 2026-06-15 by panyiguang060821
 
 **CLI-Anything harness (experimental)** in `agent-harness/`:

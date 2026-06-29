@@ -22,7 +22,9 @@
 
 ## 已可用能力
 
-当前代码库中已经实现并验证的能力包括（共 47 个工具）：
+当前代码库中已经实现并验证的能力包括（共 **60 个工具** — 47 个 Bridge + 13 个技能集成）：
+
+### Bridge 工具（C# .NET — 精细 CAD 操作）
 
 **文档与会话（8）**
 - 启动/附着/关闭 SolidWorks
@@ -70,6 +72,29 @@
 - `run_macro` - 故意禁用（VSTA 宏会崩溃 SW）
 - `add_dimension` - 已被 `add_dimension_v2` 替代
 
+### 技能集成工具（Python COM Direct — 高层工作流）
+
+**装配与配合（6）**
+- `solidworks_add_component_v2` — 增强型添加组件（AddComponent5/4 回退）
+- `solidworks_set_component_fixed` — 按关键字固定/浮动组件
+- `solidworks_add_coincident_mate` — 重合配合（支持中英文基准面名）
+- `solidworks_add_distance_mate` — 距离配合（可配置距离）
+- `solidworks_add_concentric_mate` — 共心配合（按圆柱面半径匹配）
+
+**外观与导出（3）**
+- `solidworks_set_appearance` — 设置文档/组件颜色（#RRGGBB 或预置名）
+- `solidworks_export_active` — 多格式导出（STEP/STL/IGES/Parasolid/PDF/DXF）
+- `solidworks_review_active` — 多视图 BMP 预览 + JSON 审查报告
+
+**运动算例（1）**
+- `solidworks_add_rotary_motor` — 运动算例（恒速旋转马达）
+
+**文档与健康检查（4）**
+- `solidworks_new_document` — 新建文档（自动检测模板）
+- `solidworks_save_document_v2` — 保存文档（技能版保存逻辑）
+- `solidworks_create_basic_part` — 一步创建圆柱/方块零件（含颜色）
+- `solidworks_health_check` — 环境检查（COM 依赖、SW 检测、Motion TLB）
+
 ## 当前限制
 
 `combine_all_bodies` 已暴露并带诊断返回，但在当前验证主机上还不稳定。服务器会明确报告这个状态，而不是伪装成成功。
@@ -105,7 +130,7 @@ soildworks-mcp/
 |  |- solidworks_mcp/
       |- __init__.py
       |- __main__.py
-      |- server.py              # Python MCP server，含 47 个 @mcp.tool()
+      |- server.py              # Python MCP server，含 60 个 @mcp.tool()（47 Bridge + 13 Skill）
 |- tests/
 |- server.py
 |- pyproject.toml
@@ -147,6 +172,7 @@ cli-anything-solidworks feature export "C:\temp\block.step"
 - 本机已安装 SolidWorks
 - 可访问 `SolidWorks.Interop.sldworks.dll`
 - 可访问 `SolidWorks.Interop.swconst.dll`
+- [solidworks-automation-skill](https://github.com/wzyn20051216/solidworks-automation-skill) 克隆至 `../solidworks-automation-skill/`（技能集成工具需要）
 
 ## 快速部署
 
@@ -325,7 +351,7 @@ python .\tests\tests_showcase_prompt_workflow.py
 - 直接上游: [Xuan-BOMS/soildworks-mcp](https://github.com/Xuan-BOMS/soildworks-mcp) (MIT, 2026)
 - 原始项目: [eyfel/mcp-server-solidworks](https://github.com/eyfel/mcp-server-solidworks) (MIT, 2025)
 
-本仓库在它们的基础上新增了 22 个 MCP 工具（共 47 个），已针对 SOLIDWORKS 2025 SP3（修订号 33.3.0）端到端验证。完整变更历史见 [CHANGELOG.md](CHANGELOG.md)，完整归属链见 [NOTICE.md](NOTICE.md)。
+本仓库在它们的基础上新增了 35 个 MCP 工具（共 60 个，基数为 25 个），已针对 SOLIDWORKS 2025 SP3（修订号 33.3.0）端到端验证。完整变更历史见 [CHANGELOG.md](CHANGELOG.md)，完整归属链见 [NOTICE.md](NOTICE.md)。
 
 ## 贡献与衍生
 

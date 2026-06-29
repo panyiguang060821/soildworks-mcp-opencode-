@@ -23,7 +23,9 @@ See [NOTICE.md](NOTICE.md) for the full attribution chain and
 
 ## What Works
 
-The following capabilities are implemented and verified in the current codebase (47 tools total):
+The following capabilities are implemented and verified in the current codebase (**60 tools total** — 47 Bridge + 13 Skill-Integrated):
+
+### Bridge Tools (C# .NET — fine-grained CAD operations)
 
 **Document & Session (8)**
 - launch or attach to SolidWorks
@@ -77,6 +79,29 @@ The following capabilities are implemented and verified in the current codebase 
 - `run_macro` - Intentionally disabled (VSTA macro loader can crash SW)
 - `add_dimension` (original) - Replaced by `add_dimension_v2`
 
+### Skill-Integrated Tools (Python COM Direct — higher-level workflows)
+
+**Assembly & Mates (6)**
+- `solidworks_add_component_v2` — Enhanced AddComponent with AddComponent5/4 fallback
+- `solidworks_set_component_fixed` — Fix/float component by keyword
+- `solidworks_add_coincident_mate` — Coincident mate with EN/CN plane name support
+- `solidworks_add_distance_mate` — Distance mate with configurable distance
+- `solidworks_add_concentric_mate` — Concentric mate by cylinder face radius matching
+
+**Appearance & Export (3)**
+- `solidworks_set_appearance` — Set document/component color (#RRGGBB or preset)
+- `solidworks_export_active` — Multi-format export (STEP/STL/IGES/Parasolid/PDF/DXF)
+- `solidworks_review_active` — Multi-view BMP preview + JSON review report
+
+**Motion Study (1)**
+- `solidworks_add_rotary_motor` — Motion Study with constant-speed rotary motor
+
+**Document & Health (4)**
+- `solidworks_new_document` — New document with auto template detection
+- `solidworks_save_document_v2` — Save document with skill's save logic
+- `solidworks_create_basic_part` — One-shot cylinder/box part with color
+- `solidworks_health_check` — Environment check (COM deps, SW detection, Motion TLB)
+
 ## Current Limitation
 
 `combine_all_bodies` is exposed and diagnosed, but it is not currently stable on this host. The server reports that state explicitly instead of pretending the operation succeeded.
@@ -112,7 +137,7 @@ soildworks-mcp/
 |  |- solidworks_mcp/
       |- __init__.py
       |- __main__.py
-      |- server.py              # Python MCP server with 47 @mcp.tool() registrations
+      |- server.py              # Python MCP server with 60 @mcp.tool() registrations (47 Bridge + 13 Skill)
 |- tests/
 |- server.py
 |- pyproject.toml
@@ -154,6 +179,7 @@ See `agent-harness/cli_anything/solidworks/README.md` for the full command refer
 - SolidWorks installed locally
 - access to `SolidWorks.Interop.sldworks.dll`
 - access to `SolidWorks.Interop.swconst.dll`
+- [solidworks-automation-skill](https://github.com/wzyn20051216/solidworks-automation-skill) cloned at `../solidworks-automation-skill/` (for skill-integrated tools)
 
 ## Quick Deploy
 
@@ -333,10 +359,10 @@ The synchronized code in this repository has already been updated to include:
 - Direct parent: [Xuan-BOMS/soildworks-mcp](https://github.com/Xuan-BOMS/soildworks-mcp) (MIT, 2026)
 - Original: [eyfel/mcp-server-solidworks](https://github.com/eyfel/mcp-server-solidworks) (MIT, 2025)
 
-This repository adds 22 new MCP tools (47 total) verified against SOLIDWORKS 2025
-SP3 (revision 33.3.0). See [CHANGELOG.md](CHANGELOG.md) for the full history and
-[NOTICE.md](NOTICE.md) for the complete attribution chain including all
-referenced upstream projects and API resources.
+This repository adds 35 new MCP tools (60 total, up from 25 base) verified against
+SOLIDWORKS 2025 SP3 (revision 33.3.0). See [CHANGELOG.md](CHANGELOG.md) for the
+full history and [NOTICE.md](NOTICE.md) for the complete attribution chain
+including all referenced upstream projects and API resources.
 
 ## Provenance and Contributing
 
